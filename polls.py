@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from datetime import date
 
+PARTY_REST = 'rest'
+
 @dataclass
 class Poll():
     """A single election poll.
@@ -36,28 +38,31 @@ class Poll():
         # Convert date if received as str
         if not isinstance(self.poll_date, date):
             self.poll_date = date.fromisoformat(self.poll_date)
-        # Check sum of shares
-        sum_shares = sum(share for share in self.results.values())
-        if sum_shares < 0 or sum_shares > 100:
+        # Check sample_size
+        if self.sample_size < 1:
+            raise ValueError('sample_size must be a positive integer value')
+        self.sample_size = round(self.sample_size)
+        # Check shares
+        sum_shares = 0.0
+        rest_included = False
+        for party, share in self.results.items():
+            if not (0.0 <= share <= 1.0):
+                raise ValueError(
+                    f'Shares in results must be in the range [0.0, 1.0], '
+                    'received {party}: {share}.'
+                )
+            sum_shares += share
+            if party.lower() == PARTY_REST.lower():
+                rest_included = True
+        if not (0.0 < sum_shares <= 1):
             raise ValueError(
-                'Sum of shares in results must be in the range [0.0, 100.0],\n'
+                'Sum of shares in results must be in the range (0.0, 1.0],\n'
                 f'received a total of {sum_shares}.')
-        rest_included = any(party.lower() == 'rest' for party in self.results)
-        if sum_shares <= 1.0
-        if rest_included and sum_shares != 100:
-            raise ValueError(
-                "Shares in results must sum up to exactly 100.0 if party 'rest' is included,\n"
-                f"received a total of {sum_shares}."
-            )
-        elif 
-        if sum_shares <= 1.0: # shares accidentally passed als fractions <= 1.0?
-            print(
-                'Warning: Shares are expected to be passed as percentages in the range [0.0, 100.0].\n'
-                f'A total value of only {sum_shares} was received.'
-            )
-        if not rest_included:
-            self.results['rest']
-    
-        
-        
-        
+        if rest_included:
+            if sum_shares != 1.0:
+                raise ValueError(
+                    f"Shares in results must sum up to exactly 1.0 if party '{PARTY_REST}' "
+                    f"is included,\nreceived a total of {sum_shares}."
+                )
+        else:
+            self.results[PARTY_REST] = 1.0 - sum_shares
