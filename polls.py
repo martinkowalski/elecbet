@@ -2,8 +2,12 @@
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Optional
+import numpy as np
+from numpy.typing import ArrayLike
 
-PARTY_REST = 'rest'
+OTHER_PARTIES_NAME = 'others'
+
 
 @dataclass
 class Poll():
@@ -11,13 +15,11 @@ class Poll():
     
     An election poll conducted by a pollster is defined by its poll date, its sample size, and the
     results. The results consist of parties and their calculated vote shares. Optionally, multiple
-    parties that are not further broken down can be submitted as party 'rest' (case-insensitive).
-    The share of each party in the results can be passed
-    * as fraction in the range [0.0, 1.0]. In this case the sum of all shares must be lower or
-      equal than 1.0 (exactly 1.0 if results contain a party 'rest')
-    * as percentage in the range [0.0, 100.0]. In this case the sum of all shares must be greater
-      than 1.0 and lower or equal than 100.0 (exactly 100.0 if results contain a party 'rest')
-
+    parties that are not further broken down can be submitted as party 'others' (case-insensitive).
+    The share of each party in the results can is passed as fraction in the range [0.0, 1.0]. The
+    sum of all shares must be lower or equal than 1.0 (exactly 1.0 if results contain a party
+    'others').
+    
     Args:
         poll_date (str, date): _description_
         sample_size (int): _description_
@@ -44,7 +46,7 @@ class Poll():
         self.sample_size = round(self.sample_size)
         # Check shares
         sum_shares = 0.0
-        rest_included = False
+        others_included = False
         for party, share in self.results.items():
             if not (0.0 <= share <= 1.0):
                 raise ValueError(
@@ -52,17 +54,96 @@ class Poll():
                     'received {party}: {share}.'
                 )
             sum_shares += share
-            if party.lower() == PARTY_REST.lower():
-                rest_included = True
+            if party.lower() == OTHER_PARTIES_NAME.lower():
+                others_included = True
         if not (0.0 < sum_shares <= 1):
             raise ValueError(
                 'Sum of shares in results must be in the range (0.0, 1.0],\n'
-                f'received a total of {sum_shares}.')
-        if rest_included:
+                f'received a total of {sum_shares}.'
+            )
+        if others_included:
             if sum_shares != 1.0:
                 raise ValueError(
-                    f"Shares in results must sum up to exactly 1.0 if party '{PARTY_REST}' "
-                    f"is included,\nreceived a total of {sum_shares}."
+                    f"Shares in results must sum up to exactly 1.0 if party "
+                    f"'{OTHER_PARTIES_NAME}' is included,\nreceived a total of {sum_shares}."
                 )
         else:
-            self.results[PARTY_REST] = 1.0 - sum_shares
+            self.results[OTHER_PARTIES_NAME] = 1.0 - sum_shares
+
+
+def _effective_samplesize(size: ArrayLike,
+                          share: ArrayLike,
+                          corr: float = 0.5,
+                          weights: Optional[ArrayLike] = None) -> int:
+    """Calculate the effective sample size.
+
+    This is the core function that calculates the effective sample size.
+    It is usually not intended to be called directly by the user.
+
+    This function is a port of `effective_samplesize` from `coalitions_pooling.R` in the repository
+    `adibender/coalitions` (MIT License, (c) 2016-2018 Andreas Bender).
+
+    Args:
+        size (array_like): A vector of sample sizes from different surveys (from different
+            pollsters) for one party.
+        share (array_like): The relative shares of votes for the parties of interest (each value
+            in the range [0, 1]).
+        corr (array_like, optional): Assumend correlation between surveys from different pollsters.
+            Defaults to 0.5.
+        weights (array_like, optional): Additional weights for individual surveys.
+            Defaults to None.
+
+    Returns:
+        int: The effective sample size.
+    """
+
+    # Convert to np.ndarray for caculations
+    size = np.asarray(size)
+    share = np.asarray(share)
+
+    n_inst = len(size)
+    if n_inst < 1:
+        raise ValueError('size must contain at least one element')
+    elif n_inst == 1: # return sample size if only one survey/pollster provided
+        return int(size[0])
+    
+    if any(size < 1):
+        raise ValueError('size must contain only positive values')
+    if any(share < 0.0) | any(share > 1.0):
+        raise ValueError('Values in share must be in the range [0.0, 1.0]')
+    if len(share) != n_inst:
+        raise ValueError('share must contain the same number of elements as size')
+    if corr < -1.0 or corr > 1.0:
+        raise ValueError('corr must be in the range [-1.0, 1.0]')
+    if weights is None:
+        weights = size
+    else:
+        weights = np.asarray(weights)
+        if len(weights) != n_inst: # type_ignore
+            raise ValueError(
+                'If provided, weights must contain the same number of elements as size'
+            )    
+
+    # Calculation
+    sum_weights = sum(weights)
+    p_total = sum(weights * share) / sum_weights
+    var_ind = p_total * (1.0 - p_total)
+    # n_total = sum(size)   not required
+    var_vec = share * (1 - share) / size
+    sd_vec = np.sqrt(var_vec)
+    n_comb = 0
+    for i in range(n_inst - 1, 0, -1):
+        n_comb += i
+    cov_vec = np.full(n_comb, np.nan)
+    n_cov_vec = cov_vec.copy()
+    k = n_inst - 1
+    count = 1
+    while k > 0:
+        cov_vec[(count - 1):(count + k - 1)] = corr * sd_vec[0:k] * sd_vec[(n_inst - k):n_inst]
+        n_cov_vec[(count - 1):(count + k - 1)] = weights[0:k] * weights[(n_inst - k):n_inst]
+        count += k
+        k -= 1
+    var_est = 1 / (sum(weights) ** 2) * (sum(weights ** 2 * var_vec) + sum(2 * n_cov_vec * cov_vec))
+    n_eff = var_ind / var_est
+
+    return round(n_eff)
