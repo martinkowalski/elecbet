@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Optional
 import numpy as np
-from numpy.typing import ArrayLike
 
 OTHER_PARTIES_NAME = 'others'
 
@@ -48,15 +47,15 @@ class Poll():
         sum_shares = 0.0
         others_included = False
         for party, share in self.results.items():
-            if not (0.0 <= share <= 1.0):
+            if not 0.0 <= share <= 1.0:
                 raise ValueError(
-                    f'Shares in results must be in the range [0.0, 1.0], '
-                    'received {party}: {share}.'
+                    'Shares in results must be in the range [0.0, 1.0], '
+                    f'received {party}: {share}.'
                 )
             sum_shares += share
             if party.lower() == OTHER_PARTIES_NAME.lower():
                 others_included = True
-        if not (0.0 < sum_shares <= 1):
+        if not 0.0 < sum_shares <= 1:
             raise ValueError(
                 'Sum of shares in results must be in the range (0.0, 1.0],\n'
                 f'received a total of {sum_shares}.'
@@ -71,10 +70,10 @@ class Poll():
             self.results[OTHER_PARTIES_NAME] = 1.0 - sum_shares
 
 
-def _effective_samplesize(size: ArrayLike,
-                          share: ArrayLike,
+def _effective_samplesize(sizes_one_party: list[int],
+                          shares_one_party: list[float],
                           corr: float = 0.5,
-                          weights: Optional[ArrayLike] = None) -> int:
+                          weights_surveys: Optional[list[int | float]] = None) -> int:
     """Calculate the effective sample size.
 
     This is the core function that calculates the effective sample size.
@@ -84,49 +83,47 @@ def _effective_samplesize(size: ArrayLike,
     `adibender/coalitions` (MIT License, (c) 2016-2018 Andreas Bender).
 
     Args:
-        size (array_like): A vector of sample sizes from different surveys (from different
+        size (list[int]): A vector of sample sizes from different surveys (from different
             pollsters) for one party.
-        share (array_like): The relative shares of votes for the parties of interest (each value
+        share (list[float]): The relative shares of votes for the parties of interest (each value
             in the range [0, 1]).
-        corr (array_like, optional): Assumend correlation between surveys from different pollsters.
+        corr (float, optional): Assumend correlation between surveys from different pollsters.
             Defaults to 0.5.
-        weights (array_like, optional): Additional weights for individual surveys.
+        weights (list[int | float], optional): Additional weights for individual surveys.
             Defaults to None.
 
     Returns:
         int: The effective sample size.
     """
 
-    # Convert to np.ndarray for caculations
-    size = np.asarray(size)
-    share = np.asarray(share)
+    # Convert to np.ndarrays for caculations
+    size = np.array(sizes_one_party)
+    share = np.array(shares_one_party)
+    if weights_surveys is None:
+        weights = size
+    else:
+        weights = np.array(weights_surveys)
 
-    n_inst = len(size)
+    # Check values
+    n_inst: int = size.size
     if n_inst < 1:
         raise ValueError('size must contain at least one element')
-    elif n_inst == 1: # return sample size if only one survey/pollster provided
+    if n_inst == 1: # return sample size if only one survey/pollster provided
         return int(size[0])
-    
-    if any(size < 1):
+    if (size < 1).any():
         raise ValueError('size must contain only positive values')
-    if any(share < 0.0) | any(share > 1.0):
+    if (share < 0.0).any() or (share > 1.0).any():
         raise ValueError('Values in share must be in the range [0.0, 1.0]')
-    if len(share) != n_inst:
+    if share.size != n_inst:
         raise ValueError('share must contain the same number of elements as size')
     if corr < -1.0 or corr > 1.0:
         raise ValueError('corr must be in the range [-1.0, 1.0]')
-    if weights is None:
-        weights = size
-    else:
-        weights = np.asarray(weights)
-        if len(weights) != n_inst: # type_ignore
-            raise ValueError(
-                'If provided, weights must contain the same number of elements as size'
-            )    
+    if weights.size != n_inst:
+        raise ValueError('If provided, weights must contain the same number of elements as size')
 
     # Calculation
-    sum_weights = sum(weights)
-    p_total = sum(weights * share) / sum_weights
+    sum_weights = weights.sum()
+    p_total = (weights * share).sum() / sum_weights
     var_ind = p_total * (1.0 - p_total)
     # n_total = sum(size)   not required
     var_vec = share * (1 - share) / size
@@ -143,7 +140,8 @@ def _effective_samplesize(size: ArrayLike,
         n_cov_vec[(count - 1):(count + k - 1)] = weights[0:k] * weights[(n_inst - k):n_inst]
         count += k
         k -= 1
-    var_est = 1 / (sum(weights) ** 2) * (sum(weights ** 2 * var_vec) + sum(2 * n_cov_vec * cov_vec))
+    var_est = 1 / (weights.sum() ** 2) * (((weights ** 2) * var_vec).sum()
+                                          + (2 * n_cov_vec * cov_vec).sum())
     n_eff = var_ind / var_est
 
     return round(n_eff)
