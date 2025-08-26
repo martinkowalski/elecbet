@@ -70,6 +70,26 @@ class Poll():
             self.results[OTHER_PARTIES_NAME] = 1.0 - sum_shares
 
 
+def _average_shares(results: list[dict[str, float]], sizes: list[int]) -> dict[str, float]:
+    """_summary_
+
+    Args:
+        results (list[dict[str, float]]): _description_
+        sizes (list[int]): _description_
+
+    Returns:
+        dict[str, float]: _description_
+    """
+
+    total_size: int = sum(sizes)
+    avg_shares: dict[str, float] = {}
+    for party in results[0].keys():
+        avg_shares[party] = sum(results[i][party] * sizes[i]
+                                for i in range(len(results))) / total_size
+
+    return avg_shares
+
+
 def _effective_samplesize(sizes_one_party: list[int],
                           shares_one_party: list[float],
                           corr: float = 0.5,
