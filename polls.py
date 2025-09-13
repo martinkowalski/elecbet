@@ -42,7 +42,7 @@ class Poll():
 
     def __init__(self, poll_date: str | date | datetime, sample_size: int | float,
                  pollster: str = 'unspecified', **results: float):
-        
+
         self.pollster = pollster
 
         # Convert poll_date
@@ -92,7 +92,7 @@ class Poll():
 
         # Make sure others_share is included under OTHERS_KEY
         results[Poll.OTHERS_KEY] = others_share
-        
+
         if sum_shares > 1.0: # rescale to enforce sum of 1.0 (compensation of rounding errors)
             results = {party: share / sum_shares for party, share in results.items()}
 
@@ -138,6 +138,24 @@ def pool_surveys(polls: list[Poll]) -> Poll:
     """
 
 
+def _strongest_party_shares(results: list[dict[str, float]]) -> tuple[str, list[float]]:
+    """_summary_
+
+    Args:
+        results (list[dict[str, float]]): _description_
+
+    Returns:
+        tuple[str, list[float]]: _description_
+    """
+    strongest = []
+    for poll in results:
+        strongest.append = max(poll, key=poll.get)
+        
+
+
+
+    return ('', [])
+
 
 
 def _average_shares(results: list[dict[str, float]], sizes: list[int]) -> dict[str, float]:
@@ -150,11 +168,11 @@ def _average_shares(results: list[dict[str, float]], sizes: list[int]) -> dict[s
     Returns:
         dict[str, float]: _description_
     """
-    total_size: int = sum(sizes)
+    total: int = sum(sizes)
     avg_shares: dict[str, float] = {}
     for party in results[0].keys():
         avg_shares[party] = sum(results[i][party] * sizes[i]
-                                for i in range(len(results))) / total_size
+                                for i in range(len(results))) / total
 
     return avg_shares
 
