@@ -1,9 +1,10 @@
 """Manage and pool election polls."""
 
+from collections.abc import Sequence
+from csv import DictReader
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Optional, ClassVar
-from csv import DictReader
 import numpy as np
 
 @dataclass
@@ -22,38 +23,40 @@ class Poll():
     Poll(datetime.date(2025, 5, 15), 800, party_a=0.5, party_b=0.4)
     
     Args:
-        poll_date (str, datetime.date, datetime.datetime): date or ISO string 'YYYY-MM-DD'
+        sample_date (str, datetime.date, datetime.datetime): date or ISO string 'YYYY-MM-DD'
         sample_size (int, float): positive sample size
-        pollster (str, optional): Name of the pollster. Defaults to 'unspecified'.
-        **results (float): Party shares as keyword args. Key matching 'others' (case-insensitive)
+        shares (dict[str, float]): Party shares as dict. Key matching 'others' (case-insensitive)
             denotes the bucket for other parties.
+        pollster (str, optional): Name of the pollster. Defaults to 'unspecified'.
     
     Raises:
-        ValueError: If sample size is non-positive, vote shares are invalid, or total shares are
-            out of bounds, or multiple .
+        ValueError: If sample size is non-positive, vote shares are invalid, total shares are out
+        of bounds, or multiple definitions of party 'others'.
     """
     OTHERS_KEY: ClassVar[str] = 'others'
     TOL: ClassVar[float] = 1e-6
 
-    poll_date: date
+    sample_date: date
     sample_size: int | float
-    pollster: str = 'unspecified'
-    shares: dict[str, float] = field(init=False)
+    results: dict[str, float] = field(init=False)
+    pollster: Optional[str] = None
 
     def __init__(self,
-                 poll_date: str | date | datetime,
+                 sample_date: str | date | datetime,
                  sample_size: int | float,
-                 pollster: str = 'unspecified',
-                 **shares: float):
+                 shares: dict[str, float],
+                 pollster: Optional[str] = None):
 
+        if pollster is None:
+            pollster = 'unspecified'
         self.pollster = pollster
 
         # Convert poll_date
-        if isinstance(poll_date, str):
-            poll_date = date.fromisoformat(poll_date)
-        elif isinstance(poll_date, datetime):
-            poll_date = poll_date.date()
-        self.poll_date = poll_date
+        if isinstance(sample_date, str):
+            sample_date = date.fromisoformat(sample_date)
+        elif isinstance(sample_date, datetime):
+            sample_date = sample_date.date()
+        self.sample_date = sample_date
 
         # Validate sample_size
         if sample_size <= 0:
@@ -67,11 +70,12 @@ class Poll():
         for party, share in shares.items():
             # Validate each individual share
             if not 0.0 <= share <= 1.0:
-                raise ValueError("Shares in results must be in the range [0.0, 1.0], "
-                                 f"received '{party}': {share}")
+                raise ValueError(
+                    "Sharess must be in the range [0.0, 1.0], received '{party}': {share}"
+                )
             sum_shares += share
             # Look for OTHERS_KEY (case-insensitive)
-            if party.lower() == Poll.OTHERS_KEY.lower():
+            if party.casefold() == Poll.OTHERS_KEY.casefold():
                 if others_included:
                     raise ValueError(f"Multiple '{Poll.OTHERS_KEY}' keys found (case "
                                      f"insensitive): {others_key, party}")
@@ -99,96 +103,95 @@ class Poll():
         if sum_shares > 1.0: # rescale to enforce sum of 1.0 (compensation of rounding errors)
             shares = {party: share / sum_shares for party, share in shares.items()}
 
-        self.shares = shares
-
-    @property
-    def votes(self) -> dict[str, float]:
-        """dict containing shares[party] * sample_size for each party"""
-        return {party: self.shares[party] * self.sample_size for party in self.shares.keys()}
+        self.results = shares
 
 
 def from_csv(filepath: str, encoding='utf-8') -> list[Poll]:
     """Create a list of polls from a CSV file.
-
-    Args:
-        filepath (str): _description_
-        encoding (str, optional): _description_. Defaults to 'utf-8'.
-
-    Returns:
-        list[Poll]: _description_
+    
+    The CSV file defines one poll per line and must contain the following fieldnames in the header:
+    `sample_date`, `sample_size`, and optionally `pollster`. All remaining fields are considered as
+    party names.
     """
+
     polls: list[Poll] = []
     with open(filepath, encoding=encoding, newline='') as csvfile:
         reader = DictReader(csvfile)
-        for data in reader:
-            # Convert string values from CSV file if possible to int or float
-            for key, value in data.items():
-                try:
-                    data[key] = int(value)
-                except ValueError:
-                    try:
-                        data[key] = float(value)
-                    except ValueError:
-                        data[key] = value
-            polls.append(Poll(**data)) # type: ignore
+        # Check if the CSV file defines all required fields (case insensitive)
+        fieldnames: Optional[Sequence[str]] = reader.fieldnames
+        if fieldnames is None:
+            raise ValueError('invalid header in CSV file')
+        act_fields: set[str] = {name.strip().casefold() for name in fieldnames}
+        req_fields: set[str] = {'sample_date', 'sample_size'}
+        msg_fields: set[str] = req_fields - act_fields
+        if len(msg_fields) > 0:
+            raise ValueError(f'columns {msg_fields} are missing in the CSV file')
+        # Read each line, convert values and create a Poll
+        for row in reader:
+            row = {key.strip().casefold(): value for key, value in row.items()}
+            # Metadata
+            sample_date: str = row.pop('sample_date').strip()
+            sample_size: float = float(row.pop('sample_size'))
+            pollster: Optional[str] = row.pop('pollster', None)
+            if pollster is not None:
+                pollster = pollster.strip()
+            # All remaining elements are considered to be party: share pairs
+            shares: dict[str, float] = {party.strip(): float(share) for party, share in row.items()}
+            polls.append(Poll(sample_date, sample_size, shares, pollster))
 
     return polls
 
 
-def pool_surveys(polls: list[Poll]) -> Poll:
-    """_summary_
+def pool(polls: Sequence[Poll]) -> Poll:
+    """Aggregate multiple polls into a single pooled poll.
 
     Args:
-        polls (list[Poll]): _description_
+        polls (Sequence[Poll]): _description_
+
+    Raises:
+        ValueError: _description_
 
     Returns:
         Poll: _description_
     """
-    
-    strongest: str = _strongest_party(poll.shares for poll in polls) # change to _strongest_party(polls: list[Poll]) -> tuple[list[float], list[float], (str)]
-    strongest_shares: list[float] = [poll.shares[strongest] for poll in polls]
-    strongest_votes: list[float] = [poll.votes[strongest] for poll in polls]
-    eff_votes_strongest = _effective_samplesize(strongest_votes, strongest_shares)
-    pooled_shares = _average_shares([poll.shares for poll in polls], [poll.sample_size for poll in polls]) # change to _average_shares(polls: list[Poll]), change list to Sequence
-    pooled_size = eff_votes_strongest / pooled_shares[strongest]
-    poll_dates = [poll.poll_date for poll in polls]
-    mean_ordinal = sum(dt.toordinal() for dt in poll_dates) / len(poll_dates)
-    pooled_date = date.fromordinal(mean_ordinal)    
-    
-    return Poll(pooled_date, pooled_size, 'pooled', **pooled_shares)
+    if len(polls) == 0:
+        raise ValueError
+
+    strongest, strongest_shares, strongest_sizes = _strongest_party(polls)
+    eff_votes_strongest: float = _effective_samplesize(strongest_sizes, strongest_shares)
+
+    pooled_shares: dict[str, float] = _average_shares(polls)
+    pooled_size: float = eff_votes_strongest / pooled_shares[strongest]
+
+    poll_dates: list[date] = [poll.sample_date for poll in polls]
+    mean_ordinal: int = round(sum(dt.toordinal() for dt in poll_dates) / len(poll_dates))
+    pooled_date: date = date.fromordinal(mean_ordinal)
+
+    return Poll(pooled_date, pooled_size, pooled_shares, 'pooled')
 
 
+def _strongest_party(polls: Sequence[Poll]) -> tuple[str, list[float], list[float]]:
+    """Return the name, vote shares, and vote counts of the party that most
+    frequently leads in the polls."""
 
-def _strongest_party(poll_shares_list: list[dict[str, float]]) -> str:
-    """Return name of the party that most often has the largest share in the results."""
+    # Determine strongest party
+    count: dict[str, int] = {party: 0 for party in polls[0].results}
+    for poll in polls:
+        strongest_in_poll: str = max(poll.results, key=poll.results.get)
+        count[strongest_in_poll] += 1
+    strongest: str = max(count, key=count.get)
 
-    count: dict[str, int] = {party: 0 for party in poll_shares_list[0].keys()}
-    for poll_shares_list in poll_shares_list:
-        strongest = max(poll_shares_list, key=poll_shares_list.get)
-        count[strongest] += 1
-    
-    return max(count, key=count.get)
+    return (strongest,
+            [poll.results[strongest] for poll in polls],
+            [poll.results[strongest] * poll.sample_size for poll in polls])
 
 
-def _average_shares(poll_shares_list: list[dict[str, float]], sizes: list[int]) -> dict[str, float]:
-    """_summary_
+def _average_shares(polls: Sequence[Poll]) -> dict[str, float]:
+    """Return the average share of each party across polls, weighted by sample size."""
 
-    Args:
-        results (list[dict[str, float]]): _description_
-        sizes (list[int]): _description_
-
-    Returns:
-        dict[str, float]: _description_
-    """
-    num_polls: int = len(poll_shares_list)
-    total_size: float = sum(sizes)
-    parties = poll_shares_list[0].keys()
-    avg_shares: dict[str, float] = {
-        party: sum(poll_shares_list[i][party] * sizes[i] for i in range(num_polls)) / total_size
-        for party in parties
-    }
-
-    return avg_shares
+    total_size: float = sum(poll.sample_size for poll in polls)    
+    return {party: sum(poll.results[party] * poll.sample_size for poll in polls) / total_size
+            for party in polls[0].results}
 
 
 def _effective_samplesize(one_party_sizes: list[float],
@@ -197,26 +200,27 @@ def _effective_samplesize(one_party_sizes: list[float],
                           weights_surveys: Optional[list[float]] = None) -> float:
     """Calculate the effective sample size.
 
-    This is the core function that calculates the effective sample size.
-    It is usually not intended to be called directly by the user.
+    This is the core function that calculates the effective sample size. It is not intended to be
+    called directly by the user.
 
-    This function is a port of `effective_samplesize` from `coalitions_pooling.R` in the repository
+    This function is a port of `effective_samplesize` from `pooling.R` in the GitHub repository
     `adibender/coalitions` (MIT License, (c) 2016-2018 Andreas Bender).
 
-    Args: TODO!
-        size (list[int]): A vector of sample sizes from different surveys (from different
-            pollsters) for one party.
-        share (list[float]): The relative shares of votes for the parties of interest (each value
-            in the range [0, 1]).
+    Args:
+        one_party_sizes (list[float]): A vector of sample sizes (number of votes) from different
+            surveys (from different pollsters) for one single party.
+        one_party_shares (list[float]): The relative shares of votes for the party of interest
+            (each value in [0, 1]).
         corr (float, optional): Assumend correlation between surveys from different pollsters.
             Defaults to 0.5.
-        weights (list[int | float], optional): Additional weights for individual surveys.
+        weights_surveys (list[float], optional): Additional weights for individual surveys.
             Defaults to None.
 
     Returns:
-        int: The effective sample size.
+        float: The effective sample size.
     """
     # Convert to np.ndarrays for caculations
+    # Variable names as used in the original function coalitions/R/pooling.R
     size = np.array(one_party_sizes)
     share = np.array(one_party_shares)
     if weights_surveys is None:
@@ -233,13 +237,13 @@ def _effective_samplesize(one_party_sizes: list[float],
     if (size < 1).any():
         raise ValueError('size must contain only positive values')
     if (share < 0.0).any() or (share > 1.0).any():
-        raise ValueError('Values in share must be in the range [0.0, 1.0].')
+        raise ValueError('values in share must be in [0.0, 1.0]')
     if share.size != n_inst:
         raise ValueError('share must contain the same number of elements as size')
     if corr < -1.0 or corr > 1.0:
         raise ValueError('corr must be in the range [-1.0, 1.0]')
     if weights.size != n_inst:
-        raise ValueError('If provided, weights must contain the same number of elements as size.')
+        raise ValueError('if provided, weights must contain the same number of elements as size')
 
     # Calculation
     sum_weights = weights.sum()
@@ -266,12 +270,12 @@ def _effective_samplesize(one_party_sizes: list[float],
 
     return n_eff
 
-# Self-test code
-if __name__ == '__main__':
-    poll1 = Poll('2025-03-05', 800, 'Institute_A', party_a=0.53, party_b=0.32)
-    print(poll1)
-    poll2 = Poll('2025-03-06', 600, party_a=0.6, Others=0.4)
-    print(poll2)
-    poll_list = from_csv('surveys_sample.csv')
-    for poll in poll_list:
-        print(poll)
+## Self-test code
+#if __name__ == '__main__':
+#    poll1 = Poll('2025-03-05', 800, 'Institute_A', party_a=0.53, party_b=0.32)
+#    print(poll1)
+#    poll2 = Poll('2025-03-06', 600, party_a=0.6, Others=0.4)
+#    print(poll2)
+#    poll_list = from_csv('surveys_sample.csv')
+#    for poll in poll_list:
+#        print(poll)
