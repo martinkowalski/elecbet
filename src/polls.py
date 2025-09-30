@@ -4,14 +4,14 @@ from collections.abc import Sequence
 from csv import DictReader
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Optional, ClassVar
+from typing import ClassVar
 import numpy as np
 
 @dataclass
 class Poll():
     """A single election poll.
     
-    An election poll is defined by its poll date, sample size, pollster, and party results. Party
+    An election poll is defined by its sample date, sample size, pollster, and party results. Party
     results are fractional vote shares in [0.0, 1.0] mapped to party names. Optionally, multiple
     parties that are not broken down further can be included as party Poll.OTHERS_KEY (case-
     insensitive, for example 'others').
@@ -28,10 +28,10 @@ class Poll():
     Poll(datetime.date(2025, 5, 15), 800, {'party_a': 0.5, 'party_b': 0.4})
     
     Args:
-        sample_date (str, datetime.date): date or ISO string 'YYYY-MM-DD'
+        sample_date (str, datetime.date, datetime.datetime): date or ISO string 'YYYY-MM-DD'
         sample_size (float): positive sample size
-        shares (dict[str, float]): Party shares as dict. Key matching 'others' (case-insensitive)
-            denotes the bucket for other parties.
+        results (dict[str, float]): Poll results given as party: share pairs. Key matching 'others'
+            (case-insensitive) denotes the bucket for other parties.
         pollster (str, optional): Name of the pollster. Defaults to 'unspecified'.
     
     Raises:
@@ -39,28 +39,23 @@ class Poll():
         of bounds, or multiple definitions of party 'others'.
     """
     OTHERS_KEY: ClassVar[str] = 'others'
-    TOL: ClassVar[float] = 1e-6
 
     sample_date: date
     sample_size: float
     results: dict[str, float] = field(init=False)
-    pollster: Optional[str] = None
+    pollster: str = 'unspecified'
 
     def __init__(self,
                  sample_date: str | date | datetime,
                  sample_size: float,
-                 shares: dict[str, float],
-                 pollster: Optional[str] = None) -> None:
+                 results: dict[str, float],
+                 pollster: str = 'unspecified') -> None:
 
-        if pollster is None:
-            pollster = 'unspecified'
-        self.pollster = pollster
-
-        # Convert poll_date
-        if isinstance(sample_date, str):
-            sample_date = date.fromisoformat(sample_date)
-        elif isinstance(sample_date, datetime):
+        # Handle poll_date
+        if isinstance(sample_date, datetime):
             sample_date = sample_date.date()
+        elif not isinstance(sample_date, date): # -> expected to be a str
+            sample_date = date.fromisoformat(sample_date)
         self.sample_date = sample_date
 
         # Validate sample_size
@@ -68,92 +63,123 @@ class Poll():
             raise ValueError("sample_size must be positive")
         self.sample_size = sample_size
 
+        # Handle results
+        res: dict[str, float] = results.copy()
         # Validate party shares and identify OTHERS_KEY
         sum_shares = 0.0
         others_included = False
         others_key = ''
-        for party, share in shares.items():
+        for party, share in res.items():
             # Validate each individual share
             if not 0.0 <= share <= 1.0:
-                raise ValueError(
-                    "Sharess must be in the range [0.0, 1.0], received '{party}': {share}"
-                )
+                raise ValueError("Shares must be in the range [0.0, 1.0], "
+                                 f"received '{party}': {share}")
             sum_shares += share
             # Look for OTHERS_KEY (case-insensitive)
-            if party.casefold() == Poll.OTHERS_KEY.casefold():
+            if party.lower() == Poll.OTHERS_KEY.lower():
                 if others_included:
                     raise ValueError(f"Multiple '{Poll.OTHERS_KEY}' keys found (case "
                                      f"insensitive): {others_key, party}")
                 others_included = True
                 others_key = party
-
         # Validate total shares given presence/absence of OTHERS_KEY
+        tol = 1e-6 # tolerance of rounding errors
         if others_included:
-            if not abs(1.0 - sum_shares) < Poll.TOL:
+            if abs(1.0 - sum_shares) > tol:
                 raise ValueError(
                     f"If party '{others_key}' is included, shares in results must sum up\n"
-                    f"to 1.0. Received a total of {sum_shares}."
+                    f"to 1.0 (±{tol}). Received a total of {sum_shares}."
                 )
-            others_share: float = shares.pop(others_key) # included below again
+            others_share: float = res.pop(others_key) # included below again
         else:
-            if not 0.0 < sum_shares <= 1.0 + Poll.TOL:
-                raise ValueError("Sum of shares in results must be in the range (0.0, 1.0], "
-                                f"received a total of {sum_shares}.")
-            others_share = max(1 - sum_shares, 0.0)
+            if sum_shares > 1.0 + tol:
+                raise ValueError(f"Sum of shares must be <= 1.0 (+{tol}), "
+                                 f"received a total of {sum_shares}.")
+            others_share = 1.0 - sum_shares
+            if others_share < tol:
+                others_share = 0.0
             sum_shares += others_share
-
         # Make sure others_share is included under OTHERS_KEY
-        shares[Poll.OTHERS_KEY] = others_share
+        res[Poll.OTHERS_KEY] = others_share
+        # Rescale to compensate rounding errors and enforce a sum of 1.0
+        if sum_shares != 1.0:
+            res = {party: share / sum_shares for party, share in res.items()}
 
-        if sum_shares > 1.0: # rescale to enforce sum of 1.0 (compensation of rounding errors)
-            shares = {party: share / sum_shares for party, share in shares.items()}
-
-        self.results = shares
+        self.results = res
+        self.pollster = pollster
 
     @property
     def parties(self) -> list[str]:
-        """List of polled parties"""
+        """Polled parties"""
         return list(self.results.keys())
+
+    @property
+    def shares(self) -> list[float]:
+        """Party shares"""
+        return list(self.results.values())
 
 
 def from_csv(filepath: str, encoding='utf-8') -> list[Poll]:
     """Create polls from a CSV file.
     
-    Each line in the CSV file defines a single poll. The header must include
+    Each line in the CSV file defines a single poll. Empty lines are not allowed. The header must
+    specify the following metadata:
     
     * `sample_date` (required)
     * `sample_size` (required)
     * `pollster` (optional)
     
-    All other columns are interpreted as party names (at least one required).
+    All other columns are interpreted as party names and their shares. At least one party with a
+    name differing from Poll.OTHERS_KEY must be present.
+
+    Example:
+    pollster,sample_date,sample_size,party_a,party_b,others
+    Institute_A,2025-02-10,800,0.60,0.30,0.10
+    Institute_B,2025-02-15,600,0.55,0.25,0.20
     """
     polls: list[Poll] = []
 
     with open(filepath, encoding=encoding, newline='') as csvfile:
-        reader = DictReader(csvfile)
+        reader = DictReader(csvfile, restval='')
 
         # Check (case insensitive) if the CSV file contains all required fields
-        fieldnames: Optional[Sequence[str]] = reader.fieldnames
-        if fieldnames is None:
-            raise ValueError('invalid header in CSV file')
-        act_fields: set[str] = {name.strip().casefold() for name in fieldnames}
-        req_fields: set[str] = {'sample_date', 'sample_size'}
-        msg_fields: set[str] = req_fields - act_fields
-        if len(msg_fields) > 0:
-            raise ValueError(f'columns {msg_fields} are missing in the CSV file')
+        if reader.fieldnames:
+            fnames: list[str] = list(reader.fieldnames)
+        else:
+            raise ValueError("invalid header in CSV file")
+        lc_fnames: list[str] = [name.lower().strip() for name in fnames]
+        for req in ('sample_date', 'sample_size'):
+            if not req in lc_fnames:
+                raise ValueError(f"column '{req}' is missing in the CSV file")
 
-        # Read each line, convert values and create a Poll
-        for row in reader:
-            row = {key.strip().casefold(): value for key, value in row.items()}
-            # Metadata
-            sample_date: str = row.pop('sample_date').strip()
-            sample_size: float = float(row.pop('sample_size'))
-            pollster: Optional[str] = row.pop('pollster', None)
-            if pollster is not None:
-                pollster = pollster.strip()
-            # All remaining elements are considered to be party: share pairs
-            shares: dict[str, float] = {party.strip(): float(share) for party, share in row.items()}
-            polls.append(Poll(sample_date, sample_size, shares, pollster))
+        # Extract case sensitive metadata fieldnames
+        fname_date: str = fnames[lc_fnames.index('sample_date')]
+        fname_size: str = fnames[lc_fnames.index('sample_size')]
+        fname_pollster: str | None = (fnames[lc_fnames.index('pollster')]
+                                      if 'pollster' in lc_fnames else None)
+        # All remaining fields are interpreted as party names
+        party_names: list[str] = [name for name in fnames
+                                  if name not in [fname_date, fname_size, fname_pollster]]
+        if not party_names or (len(party_names) == 1 and Poll.OTHERS_KEY.lower() in lc_fnames):
+            raise ValueError("CSV file must contain at least shares of one party "
+                             f"differing from '{Poll.OTHERS_KEY}'")
+        # Check for duplicates after removing whitespaces
+        norm_names: set = set(name.strip for name in party_names)
+        if len(norm_names) != len(party_names):
+            raise ValueError("duplicate party name(s) in the header")
+
+        # Read each line, try to convert values and create a Poll
+        for line_no, row in enumerate(reader, 2):
+            try:
+                # Metadata
+                sample_date: date = date.fromisoformat(row[fname_date].strip())
+                sample_size: float = float(row[fname_size])
+                pollster: str = row.get(fname_pollster, '').strip()
+                # Party shares
+                results = {party.strip(): float(row[party]) for party in party_names}
+                polls.append(Poll(sample_date, sample_size, results, pollster or 'unspecified'))
+            except ValueError as e:
+                raise ValueError(f"invalid data in line {line_no}") from e
 
     return polls
 
@@ -190,7 +216,7 @@ def pool(polls: Sequence[Poll]) -> Poll:
         if parties_i != parties_0:
             raise ValueError(f"Parties in\npolls[{i}]: {parties_i}\n are not equal to "
                              f"parties in\npolls[0]: {parties_0}.")
-    
+
     # Compute the shares of the pooled poll as average shares weighted by the sample sizes
     total_size: float = sum(poll.sample_size for poll in polls)
     pooled_shares: dict[str, float] = {
@@ -220,7 +246,7 @@ def pool(polls: Sequence[Poll]) -> Poll:
 def _effective_samplesize(one_party_sizes: list[float],
                           one_party_shares: list[float],
                           corr: float = 0.5,
-                          weights_surveys: Optional[list[float]] = None) -> float:
+                          weights_surveys: list[float] | None = None) -> float:
     """Calculate the effective sample size.
 
     This is the core function that calculates the effective sample size. It is not intended to be
@@ -254,19 +280,19 @@ def _effective_samplesize(one_party_sizes: list[float],
     # Check values
     n_inst: int = size.size
     if n_inst < 1:
-        raise ValueError('size must contain at least one element')
+        raise ValueError("size must contain at least one element")
     if n_inst == 1: # return sample size if only one survey/pollster provided
         return int(size[0])
     if (size < 1).any():
-        raise ValueError('size must contain only positive values')
+        raise ValueError("size must contain only positive values")
     if (share < 0.0).any() or (share > 1.0).any():
-        raise ValueError('values in share must be in [0.0, 1.0]')
+        raise ValueError("values in share must be in [0.0, 1.0]")
     if share.size != n_inst:
-        raise ValueError('share must contain the same number of elements as size')
+        raise ValueError("share must contain the same number of elements as size")
     if corr < -1.0 or corr > 1.0:
-        raise ValueError('corr must be in the range [-1.0, 1.0]')
+        raise ValueError("corr must be in the range [-1.0, 1.0]")
     if weights.size != n_inst:
-        raise ValueError('if provided, weights must contain the same number of elements as size')
+        raise ValueError("if provided, weights must contain the same number of elements as size")
 
     # Calculation
     sum_weights = weights.sum()
