@@ -196,32 +196,56 @@ def from_csv(filepath: str, encoding='utf-8') -> list[Poll]:
     return polls
 
 
-def pool(polls: Sequence[Poll]) -> Poll:
+def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
     """Aggregate multiple polls into a single pooled poll.
 
-    For pooling, all given polls must include the same parties. The pooling is done in the
-    following steps:
-    1. Compute pooled shares of all parties.
-    2. Determine leading party (the party that has most often the largest share in the polls).
-    3. Calculate the sizes (hypothetical vote counts) of the leading party across all polls.
-    4. Calculate the effective sample size of the leading party.
-    5. Calculate the effective sample size of the pooled poll.
+    All given polls must include the same parties. Furthermore, for meaningful results, the
+    following conditions should be met:
+    * All polls are published within a certain time span (for example, 14 days).
+    * Polls come from different polling agencies.
+    
+    The pooling is done in the following steps:
+    1. Compute the pooled shares as weighted average shares of each party across polls:
+            total_size = sum(poll.sample_size for poll in polls)
+            pooled_shares[party] = sum(poll.results[party] * poll.sample_size / total_size
+                                       for poll in polls)
+    2. Determine the leading party (with the highest average share) and its polled shares across
+       all polls.
+    3. Calculate the sizes (hypothetical vote counts) of the leading party across all polls:
+            leader_sizes[i] = polls[i].sample_size * pooled_shares[leader],
+            i = 0, ..., len(polls)
+    4. Calculate the effective sample size of the leading party taking into account correlations
+       between different polling agencies:
+            eff_size_leader = _effective_samplesize(leader_sizes, leader_shares, pollster_corr)
+    5. Calculate the effective sample size of the pooled poll
+            pooled_size = eff_size_leader / pooled_shares[leader]
     6. Calculate the pooled sample date as the mean of the poll sample dates.
+    7. Create and return the pooled poll
+            Poll(sample_date = pooled_date,
+                 sample_size = pooled_size,
+                 results = pooled_shares,
+                 pollster = 'pooled')
 
-    The pooling method used in this function is described in
+    The pooling method used is described in
         Bauer, A., Bender, A., Klima, A. et al. KOALA: a new paradigm for election coverage.
         AStA Adv Stat Anal 104, 101–115 (2020). https://doi.org/10.1007/s10182-019-00352-6
 
     Args:
-        polls (Sequence[Poll]): A list of polls. Each poll must contain the same parties.
+        polls (Sequence[Poll]): A list of polls, each containing the same parties.
+        pollster_corr (float, optional): Assumed correlation between polls from different
+            pollsters, passed to _effective_samplesize. Defaults to 0.5.
 
     Returns:
-        Poll: The pooled poll, containing the effective sample size, weighted average party shares,
-            and mean sample date. The pollster name is set to 'pooled'.
+        Poll: The pooling result.
     """
     # Check polls
     if len(polls) == 0:
         raise ValueError('input arg is empty')
+    if len(polls) == 1:
+        return Poll(polls[0].sample_date, polls[0].sample_size,
+                    polls[0].results, polls[0].pollster)
+
+    # Check if all polls contain the same parties
     parties_0: set = set(polls[0].parties)
     for i in range(1, len(polls)):
         parties_i: set = set(polls[i].parties)
@@ -229,25 +253,26 @@ def pool(polls: Sequence[Poll]) -> Poll:
             raise ValueError(f"Parties in\npolls[{i}]: {parties_i}\n are not equal to "
                              f"parties in\npolls[0]: {parties_0}.")
 
-    # Compute the shares of the pooled poll as average shares weighted by the sample sizes
+    # 1. Compute pooled shares of each party in polls
     total_size: float = sum(poll.sample_size for poll in polls)
     pooled_shares: dict[str, float] = {
         party: sum(poll.results[party] * poll.sample_size for poll in polls) / total_size
         for party in polls[0].results
     }
-
-    # Determine shares and sizes of the leading party across all polls
+    # 2. Determine the leading party and its shares across all polls
     leader: str = max(pooled_shares, key=pooled_shares.get) # type: ignore
-    lead_shares: list[float] = [poll.results[leader] for poll in polls]
-    # Note: The list of sizes passed to _effective_samplesize is based on the pooled share of the
-    # leading party, not its actual shares in the individual polls
-    lead_sizes: list[float] = [poll.sample_size * pooled_shares[leader] for poll in polls]
+    leader_shares: list[float] = [poll.results[leader] for poll in polls]
 
-    # The size of the pooled poll based is based on the sizes and shares of the leading party
-    eff_size_leader: float = _effective_samplesize(lead_sizes, lead_shares)
+    # 3. Calculate the sizes of the leading party across all polls. Note: This sizes are based on
+    # based on the pooled share of the leading party, not its actual shares in the individual polls
+    leader_sizes: list[float] = [poll.sample_size * pooled_shares[leader] for poll in polls]
+
+    # 4. Calculate the effective sample size of the leading party
+    eff_size_leader: float = _effective_samplesize(leader_sizes, leader_shares, pollster_corr)
+    # 5. Calculate the effective sample size of the pooled poll
     pooled_size: float = eff_size_leader / pooled_shares[leader]
 
-    # Date the pooled poll is the mean date of the polls
+    # 6. Calculate the pooled sample date
     poll_dates: list[date] = [poll.sample_date for poll in polls]
     mean_ordinal: int = round(sum(dt.toordinal() for dt in poll_dates) / len(poll_dates))
     pooled_date: date = date.fromordinal(mean_ordinal)
@@ -272,10 +297,10 @@ def _effective_samplesize(one_party_sizes: list[float],
             surveys (from different pollsters) for one single party.
         one_party_shares (list[float]): The relative shares of votes for the party of interest
             (each value in [0, 1]).
-        corr (float, optional): Assumend correlation between surveys from different pollsters.
+        corr (float, optional): Assumed correlation between surveys from different pollsters.
             Defaults to 0.5.
         survey_weights (list[float], optional): Additional weights for individual surveys.
-            Defaults to None, in this case survey_weights = one_party_sizes.
+            Defaults to None, in this case survey_weights = one_party_sizes will be assigned.
 
     Returns:
         float: The effective sample size.
