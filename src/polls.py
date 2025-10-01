@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import ClassVar
 import numpy as np
+from numpy.typing import NDArray
+
+FloatArray = NDArray[np.float64]
 
 @dataclass
 class Poll():
@@ -255,7 +258,7 @@ def pool(polls: Sequence[Poll]) -> Poll:
 def _effective_samplesize(one_party_sizes: list[float],
                           one_party_shares: list[float],
                           corr: float = 0.5,
-                          weights_surveys: list[float] | None = None) -> float:
+                          survey_weights: list[float] | None = None) -> float:
     """Calculate the effective sample size.
 
     This is the core function that calculates the effective sample size. It is not intended to be
@@ -271,20 +274,21 @@ def _effective_samplesize(one_party_sizes: list[float],
             (each value in [0, 1]).
         corr (float, optional): Assumend correlation between surveys from different pollsters.
             Defaults to 0.5.
-        weights_surveys (list[float], optional): Additional weights for individual surveys.
-            Defaults to None.
+        survey_weights (list[float], optional): Additional weights for individual surveys.
+            Defaults to None, in this case survey_weights = one_party_sizes.
 
     Returns:
         float: The effective sample size.
     """
     # Convert to np.ndarrays for caculations
     # Variable names as used in the original function pooling.R
-    size = np.array(one_party_sizes)
-    share = np.array(one_party_shares)
-    if weights_surveys is None:
+    size: FloatArray = np.array(one_party_sizes)
+    share: FloatArray = np.array(one_party_shares)
+    weights: FloatArray
+    if survey_weights is None:
         weights = size
     else:
-        weights = np.array(weights_surveys)
+        weights = np.array(survey_weights)
 
     # Check values
     n_inst: int = size.size
