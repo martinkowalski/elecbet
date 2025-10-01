@@ -108,6 +108,14 @@ class Poll():
         self.results = res
         self.pollster = pollster
 
+    def __str__(self) -> str:
+        width: int = max(len(name) for name in self.results.keys()) + 2
+        desc: str = f"{self.pollster}, {self.sample_date}, size = {self.sample_size:.2f}"
+        for party, share in self.results.items():
+            desc += f"\n{party:>{width}}: {share:.2%}"
+
+        return desc
+
     @property
     def parties(self) -> list[str]:
         """Polled parties"""
@@ -163,6 +171,7 @@ def from_csv(filepath: str, encoding='utf-8') -> list[Poll]:
         if not party_names or (len(party_names) == 1 and Poll.OTHERS_KEY.lower() in lc_fnames):
             raise ValueError("CSV file must contain at least shares of one party "
                              f"differing from '{Poll.OTHERS_KEY}'")
+
         # Check for duplicates after removing whitespaces
         norm_names: set = set(name.strip for name in party_names)
         if len(norm_names) != len(party_names):
