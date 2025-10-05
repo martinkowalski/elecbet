@@ -1,4 +1,5 @@
 """Manage and pool election polls."""
+# TODO Move reference to module doc, update fcn docstrings
 
 from collections.abc import Sequence
 from csv import DictReader
