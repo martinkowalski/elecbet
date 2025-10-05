@@ -16,7 +16,7 @@ class Poll():
     
     An election poll is defined by its sample date, sample size, pollster, and party results. Party
     results are fractional vote shares in [0.0, 1.0] mapped to party names. Optionally, multiple
-    parties that are not broken down further can be included as party Poll.OTHERS_KEY (case-
+    parties that are not broken down further can be included as party `Poll.OTHERS_KEY` (case-
     insensitive, for example 'others').
     
     The sum of all shares must be less or equal to 1.0. If 'others' is provided, the sum of all
@@ -356,3 +356,68 @@ def _effective_samplesize(one_party_sizes: list[float],
     n_eff = var_ind / var_est
 
     return float(n_eff)
+
+
+def sim_election(poll: Poll, nsim: int,
+                 rounding_step: float = 0.0) -> tuple[FloatArray, list[str]]:
+    """Run a Monte Carlo simulation of election outcomes.
+
+    Draw `nsim` samples of party vote shares for the `np` parties in `poll` using a Dirichlet
+    distribution according to the KOALA model (see the module-level reference). Return simulation
+    results as tuple `(results, party_names)`. `results` is an np.ndarray of shape `(nsim, np)`,
+    `parties` is a list of `np` party names. Thus, `results[i, j]` is the share of `parties[j]` in
+    simulation `i`.
+
+    Poll results are often published as rounded values. To account for this, set
+    `rounding_step > 0.0`, indicating that `poll.shares` are based on values rounded to multiples
+    of `rounding_step` (for example, `rounding_step = 0.01` means rounding to whole percentage
+    points). When `rounding_step > 0.0`, in every simulation i.i.d. uniform noise in
+    `[-rounding_step/2, +rounding_step/2]` is added to `poll.shares` for each simulation. The
+    perturbed shares are then clipped to [0, 1] and renormalized to sum to 1.0.
+    If `rounding_step <= `0, no perturbation is applied and all results are drawn based on the same
+    base shares (`poll.shares`).
+
+    Args:
+        poll (Poll): The poll based on which the simulation is being done. Typically created by
+            aggregating of multiple individual polls using `pool(polls)`.
+        nsim (int): Number of independent election results to create.
+        rounding_step (float, optional): Increment to which the poll shares (or shares of
+        underlying aggregated polls) have been rounded. A non positive value disables rounding
+            compensation. Defaults to 0.0.
+
+    Returns:
+        tuple[FloatArray, list[str]]: `(`results, parties)`. `results` has the shape `(nsim, np)`.
+            `results[i, j]` is the share of `parties[j]` in simulation `i`.
+    """
+    base_shares: FloatArray = np.array(poll.shares)
+    alpha: FloatArray
+    rng = np.random.default_rng()
+
+    if rounding_step <= 0.0: # no rounding compensation
+        alpha = base_shares * poll.sample_size + 0.5
+        return rng.dirichlet(alpha, size=nsim), poll.parties
+
+    # rounding_step > 0.0 => apply rounding compensation
+    # Ensure that below not all noisy_shares can become 0.0 after clipping
+    delta: float = rounding_step / 2
+    if (base_shares <= delta).all():
+        raise ValueError(f"rounding_step/2 = {delta} >= all shares in the given poll")
+    # Add noise and renormalize shares
+    noisy_shares: FloatArray = base_shares + rng.uniform(-delta, delta,
+                                                           size=(nsim, base_shares.size))
+    noisy_shares = noisy_shares.clip(0.0, 1.0)
+    noisy_shares /= noisy_shares.sum(axis=1, keepdims=True)
+    alpha = noisy_shares * poll.sample_size + 0.5
+    # Because rng.dirichlet accepts only a single alpha vector, use rng.gamma to generate
+    # dirichlet distributed results from per-sample alpha (matrix)
+    # (see https://en.wikipedia.org/wiki/Dirichlet_distribution for details)
+    gam_draws: FloatArray = rng.gamma(alpha)
+
+    return gam_draws / gam_draws.sum(axis=1, keepdims=True), poll.parties
+
+
+if __name__ == '__main__':
+    polls = from_csv('tests/pooled_sample.csv')
+    poll = polls[0]
+    res = sim_election(poll, 10, 0.01)
+    print(res)
