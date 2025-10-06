@@ -1,5 +1,27 @@
-"""Manage and pool election polls."""
-# TODO Move reference to module doc, update fcn docstrings
+"""Manage and pool election polls, simulate election outcomes.
+
+Functionality:
+- Poll: Metadata and results of an election poll in a multi-party system.
+- from_csv: Create polls from a CSV file.
+- pool: Aggregate multiple polls into a single pooled poll.
+- sim_election: Run a Monte Carlo simulation of election outcomes.
+
+The applied methods in this module (especially of the functions `pool` and `sim_election`)
+are based on the publication:
+    Bauer, A., Bender, A., Klima, A. et al. KOALA: a new paradigm for election coverage.
+    AStA Adv Stat Anal 104, 101-115 (2020). https://doi.org/10.1007/s10182-019-00352-6
+
+Example:
+    >>> from polls import Poll, from_csv, pool, sim_election
+    >>> # Create
+    >>> poll = Poll('2025-05-15', 800, {'party_a': 0.5, 'party_b': 0.4}, 'Institute A')
+    >>> prev_polls = po.from_csv('path_to/poll_data.csv') # must contain party_a, party_b
+    >>> polls = prev_polls + [poll]
+    >>> # Pool
+    >>> pooled_poll = pool(polls)
+    >>> # Simulate
+    >>> sim_results, parties = sim_election(pooled_poll, rounding_step=0.01)
+"""
 
 from collections.abc import Sequence
 from csv import DictReader
@@ -13,26 +35,26 @@ FloatArray = NDArray[np.float64]
 
 @dataclass
 class Poll():
-    """A single election poll.
+    """Metadata and results of an election poll in a multi-party system.
     
-    An election poll is defined by its sample date, sample size, pollster, and party results. Party
-    results are fractional vote shares in [0.0, 1.0] mapped to party names. Optionally, multiple
-    parties that are not broken down further can be included as party `Poll.OTHERS_KEY` (case-
-    insensitive, for example 'others').
+    An election poll consists of the attributes `sample_date`, `sample_size`, `pollster`, and party
+    `results`. `results` are fractional vote shares in [0.0, 1.0] mapped to party names.
+    Optionally, multiple parties that are not broken down further can be included as party
+    `Poll.OTHERS_KEY` (case-insensitive, for example 'others').
     
     The sum of all shares must be less or equal to 1.0. If 'others' is provided, the sum of all
     shares must be (tolerant of rounding errors) 1.0. If 'others' is not provided, its share will
     be computed such that the sum of shares is equal to 1.0.
 
-    The sample size is usually the number of respondents. However, it can also be a representative
-    number which is not necessarily an integer value.
+    `sample_size` is usually the number of respondents. It must be positive, however, it can also
+    be a representative number and must not necessarily be an integer value.
 
-    Examples:
-    Poll('2025-05-15', 800, {'Party a': 0.5, 'Party b': 0.4, 'others': 0.1}, 'Institute A')
-    Poll(datetime.date(2025, 5, 15), 800, {'party_a': 0.5, 'party_b': 0.4})
-    
+    Additional class attributes:
+    - parties (list[str]): List of party names derived from poll results.
+    - shares (list[float]): List of party shares derived from poll results.
+
     Args:
-        sample_date (str, datetime.date, datetime.datetime): date or ISO string 'YYYY-MM-DD'
+        sample_date (str | datetime.date | datetime.datetime): date or ISO string 'YYYY-MM-DD'
         sample_size (float): positive sample size
         results (dict[str, float]): Poll results given as party: share pairs. Key matching 'others'
             (case-insensitive) denotes the bucket for other parties.
@@ -40,7 +62,13 @@ class Poll():
     
     Raises:
         ValueError: If sample size is non-positive, vote shares are invalid, total shares are out
-        of bounds, or multiple definitions of party 'others'.
+            of bounds, or multiple definitions of party 'others'.
+    
+    Examples:
+        >>> p1 = Poll('2025-05-15', 800, {'Party a': 0.5, 'Party b': 0.4, 'others': 0.1}, 'InstX')
+        >>> p2 = Poll(datetime.date(2025, 5, 15), 800, {'party_a': 0.5, 'party_b': 0.4})
+        >>> p2.shares
+        [0.5, 0.4, 0.1]
     """
     OTHERS_KEY: ClassVar[str] = 'others'
 
@@ -131,28 +159,41 @@ class Poll():
         return list(self.results.values())
 
 
-def from_csv(filepath: str, encoding='utf-8') -> list[Poll]:
+def from_csv(filepath: str, encoding='utf-8', **kargs) -> list[Poll]:
     """Create polls from a CSV file.
     
     Each line in the CSV file defines a single poll. Empty lines are not allowed. The header must
     specify the following metadata:
-    
-    * `sample_date` (required)
-    * `sample_size` (required)
-    * `pollster` (optional)
+    - sample_date (required)
+    - sample_size (required)
+    - pollster (optional)
     
     All other columns are interpreted as party names and their shares. At least one party with a
-    name differing from Poll.OTHERS_KEY must be present.
+    name differing from `Poll.OTHERS_KEY` must be present.    
 
+    Args:
+        filepath (str): Path to the CSV file.
+        encoding (str, optional): Encoding of the CSV file. Defaults to 'utf-8'.
+        **kargs: Additional keyword arguments to pass to `csv.DictReader()`.
+
+    Raises:
+        ValueError: On invalid header, missing parties, duplicate party names, invalid
+            share values.
+
+    Returns:
+        list[Poll]: A list of polls.
+    
     Example:
+    ```
     pollster,sample_date,sample_size,party_a,party_b,others
     Institute_A,2025-02-10,800,0.60,0.30,0.10
     Institute_B,2025-02-15,600,0.55,0.25,0.20
+    ```
     """
     polls: list[Poll] = []
 
-    with open(filepath, encoding=encoding, newline='') as csvfile:
-        reader = DictReader(csvfile, restval='')
+    with open(filepath, encoding=encoding, newline='', **kargs) as csvfile:
+        reader = DictReader(csvfile, restval='', **kargs)
 
         # Check (case insensitive) if the CSV file contains all required fields
         if reader.fieldnames:
@@ -179,7 +220,7 @@ def from_csv(filepath: str, encoding='utf-8') -> list[Poll]:
         # Check for duplicates after removing whitespaces
         norm_names: set = set(name.strip for name in party_names)
         if len(norm_names) != len(party_names):
-            raise ValueError("duplicate party name(s) in the header")
+            raise ValueError("duplicate party names in the header")
 
         # Read each line, try to convert values and create a Poll
         for line_no, row in enumerate(reader, 2):
@@ -202,10 +243,10 @@ def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
 
     All given polls must include the same parties. Furthermore, for meaningful results, the
     following conditions should be met:
-    * All polls are published within a certain time span (for example, 14 days).
-    * Polls come from different polling agencies.
+    - All polls are published within a certain time span (for example, 14 days).
+    - Polls come from different polling agencies.
     
-    The pooling is done in the following steps:
+    The pooling is done in the following steps (for more details see the module-level reference):
     1. Compute the pooled shares as weighted average shares of each party across polls:
             total_size = sum(poll.sample_size for poll in polls)
             pooled_shares[party] = sum(poll.results[party] * poll.sample_size / total_size
@@ -226,10 +267,6 @@ def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
                  sample_size = pooled_size,
                  results = pooled_shares,
                  pollster = 'pooled')
-
-    The pooling method used is described in
-        Bauer, A., Bender, A., Klima, A. et al. KOALA: a new paradigm for election coverage.
-        AStA Adv Stat Anal 104, 101–115 (2020). https://doi.org/10.1007/s10182-019-00352-6
 
     Args:
         polls (Sequence[Poll]): A list of polls, each containing the same parties.
@@ -291,7 +328,8 @@ def _effective_samplesize(one_party_sizes: list[float],
     called directly by the user.
 
     This function is a port of `effective_samplesize` from `pooling.R` in the GitHub repository
-    `adibender/coalitions` (MIT License, (c) 2016-2018 Andreas Bender).
+    `adibender/coalitions` (MIT License, (c) 2016-2018 Andreas Bender). See also the
+    module-level reference.
 
     Args:
         one_party_sizes (list[float]): A vector of sample sizes (number of votes) from different
@@ -415,10 +453,3 @@ def sim_election(poll: Poll, nsim: int,
     gam_draws: FloatArray = rng.gamma(alpha)
 
     return gam_draws / gam_draws.sum(axis=1, keepdims=True), poll.parties
-
-
-if __name__ == '__main__':
-    polls = from_csv('tests/pooled_sample.csv')
-    poll = polls[0]
-    res = sim_election(poll, 10, 0.01)
-    print(res)
