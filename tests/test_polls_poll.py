@@ -1,8 +1,13 @@
-"""End-to-end test of poll creation and pooling"""
+"""Tests the Poll class."""
 
 import numpy as np
 import pytest
-from src.polls import from_csv, pool, sim_election
+from src.polls import Poll, from_csv, pool, sim_election
+
+class TestPollCreation:
+    def test_valid_creation(self):
+        p1 = Poll('2025-05-15', 800, {'Party a': 0.5, 'Party b': 0.4, 'others': 0.1}, 'InstX')
+
 
 def test_from_csv_and_pool():
     """Verify that polls are created correctly from CSV files and pooled as expected.
@@ -30,13 +35,15 @@ def test_sim_election():
     val_data_file = 'tests/pooled_sample_simulation_covariance.csv'
     exp_parties = np.loadtxt(val_data_file, delimiter=',', max_rows=1, dtype=str)
     exp_cov = np.loadtxt(val_data_file, delimiter=',', skiprows=1)
-    # Simulate elections from pooled sample
+    # Simulate elections
     poll = from_csv('tests/pooled_sample.csv')
     sim_results, sim_parties = sim_election(poll[0], 1_000_000, rounding_step=0.01)
     # Reorder sim_results to match the order of exp_parties
     idx_mapping = [sim_parties.index(party) for party in exp_parties]
     reord_results = sim_results[:, idx_mapping]
+    # Covariance obtained from sim_results
     act_cov = np.cov(reord_results.T)
+    
     assert act_cov == pytest.approx(exp_cov, rel=1e-1)
     # TODO add comparison of mean values
     # TODO find names for csv data files
