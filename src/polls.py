@@ -39,7 +39,7 @@ from numpy.typing import NDArray
 FloatArray = NDArray[np.float64]
 
 @dataclass
-class Poll():
+class Poll:
     """Metadata and results of an election poll in a multi-party system.
     
     An election poll includes the attributes `sample_date`, `sample_size`, `pollster`, and
@@ -216,15 +216,14 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
         fname_pollster: str | None = (fnames[lc_fnames.index('pollster')]
                                       if 'pollster' in lc_fnames else None)
         # All remaining fields are interpreted as party names
-        party_names: list[str] = [name for name in fnames
-                                  if name not in [fname_date, fname_size, fname_pollster]]
-        if not party_names or (len(party_names) == 1 and Poll.OTHERS_KEY.lower() in lc_fnames):
+        parties: list[str] = [party for party in fnames
+                              if party not in [fname_date, fname_size, fname_pollster]]
+        if not parties or (len(parties) == 1 and Poll.OTHERS_KEY.lower() in lc_fnames):
             raise ValueError("CSV file must contain at least shares of one party "
                              f"differing from '{Poll.OTHERS_KEY}'")
 
-        # Check for duplicates after removing whitespaces
-        norm_names: set = set(name.strip() for name in party_names)
-        if len(norm_names) != len(party_names):
+        # Check for duplicates
+        if len(parties) != len(set(name.strip() for name in parties)):
             raise ValueError("duplicate party names in the header")
 
         # Read each line, try to convert values and create a Poll
@@ -235,7 +234,7 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
                 sample_size: float = float(row[fname_size])
                 pollster: str = row.get(fname_pollster, '').strip()
                 # Party shares
-                results = {party.strip(): float(row[party]) for party in party_names}
+                results = {party.strip(): float(row[party]) for party in parties}
                 polls.append(Poll(sample_date, sample_size, results, pollster or 'unspecified'))
             except ValueError as e:
                 raise ValueError(f"invalid data in line {line_no}") from e
@@ -279,8 +278,8 @@ def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
         Poll: The aggregated poll.
     """
     # Check polls
-    if len(polls) == 0:
-        raise ValueError('input arg is empty')
+    if not polls:
+        raise ValueError('polls must not be empty')
     if len(polls) == 1:
         return Poll(polls[0].sample_date, polls[0].sample_size,
                     polls[0].results, polls[0].pollster)
@@ -313,8 +312,8 @@ def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
     pooled_size: float = eff_size_leader / pooled_shares[leader]
 
     # 6. Calculate the pooled sample date
-    poll_dates: list[date] = [poll.sample_date for poll in polls]
-    mean_ordinal: int = round(sum(dt.toordinal() for dt in poll_dates) / len(poll_dates))
+    sample_dates: list[date] = [poll.sample_date for poll in polls]
+    mean_ordinal: int = round(sum(dt.toordinal() for dt in sample_dates) / len(sample_dates))
     pooled_date: date = date.fromordinal(mean_ordinal)
 
     return Poll(pooled_date, pooled_size, pooled_shares, 'pooled')
@@ -361,7 +360,7 @@ def _effective_samplesize(one_party_sizes: list[float],
     if n_inst < 1:
         raise ValueError("size must contain at least one element")
     if n_inst == 1: # return sample size if only one survey/pollster provided
-        return int(size[0])
+        return size[0]
     if (size < 1).any():
         raise ValueError("size must contain only positive values")
     if (share < 0.0).any() or (share > 1.0).any():
