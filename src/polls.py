@@ -197,7 +197,7 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
     """
     polls: list[Poll] = []
 
-    with open(filepath, encoding=encoding, newline='', **kwargs) as csvfile:
+    with open(filepath, encoding=encoding, newline='') as csvfile:
         reader = DictReader(csvfile, restval='', **kwargs)
 
         # Check (case insensitive) if the CSV file contains all required fields
