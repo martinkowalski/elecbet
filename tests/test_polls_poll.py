@@ -1,49 +1,41 @@
-"""Tests the Poll class."""
+"""Test polls.Poll construction."""
 
-import numpy as np
+import datetime as dt
 import pytest
-from src.polls import Poll, from_csv, pool, sim_election
+from src.polls import Poll
 
-class TestPollCreation:
-    def test_valid_creation(self):
-        p1 = Poll('2025-05-15', 800, {'Party a': 0.5, 'Party b': 0.4, 'others': 0.1}, 'InstX')
+# pylint: disable=missing-docstring
 
+def test_valid_poll_with_others():
+    poll = Poll('2025-05-15', 0.5, {'Party A': 0.4, 'Party B': 0.5, 'OthErS': 0.1})
+    assert poll.sample_date == dt.date(2025, 5, 15)
+    assert poll.sample_size == 0.5
+    assert poll.results['Party A'] == pytest.approx(0.4)
+    assert poll.results['Party B'] == pytest.approx(0.5)
+    assert poll.results[Poll.OTHERS_KEY] == pytest.approx(0.1)
 
-def test_from_csv_and_pool():
-    """Verify that polls are created correctly from CSV files and pooled as expected.
+def test_valid_poll_without_others():
+    poll = Poll('2025-05-15', 800, {'a': 0.5, 'b': 0.4999}, 'X')
+    assert poll.pollster == 'X'
+    assert poll.parties == ['a', 'b', Poll.OTHERS_KEY]
+    assert poll.shares == pytest.approx([0.5000, 0.4999, 0.0001])
 
-    Input and expected output data derived from `data/surveys_sample.rda` in
-    `adibender/coalitions` (see also `tests/testthat/test-pooling.R`).
-    """
-    polls = from_csv('tests/sample_polls.csv')
-    act = pool(polls)
+def test_invalid_sample_size():
+    with pytest.raises(ValueError):
+        Poll('2025-05-15', 0, {'a': 0.4, 'b': 0.5})
 
-    exp_list = from_csv('tests/pooled_sample.csv')
-    exp = exp_list[0]
+def test_invalid_share_range():
+    with pytest.raises(ValueError, match='Shares must be in the range'):
+        Poll('2025-05-15', 1000, {'a': -0.1, 'b': 0.5})
 
-    assert act.results == pytest.approx(exp.results)
-    assert act.sample_size == pytest.approx(exp.sample_size)
-    assert act.sample_date == exp.sample_date
+def test_multiple_others_keys():
+    with pytest.raises(ValueError):
+        Poll('2025-05-15', 1000, {'a': 0.4, 'others': 0.3, 'OTHERS': 0.2})
 
-def test_sim_election():
-    """Test simulation of elections based on pooled_sample.csv pooling results.
-    
-    The correctness of the simulation is determined by comparing the covariance matrix resulting
-    from the simulation result.
-    """
-    # Load validation data
-    val_data_file = 'tests/pooled_sample_simulation_covariance.csv'
-    exp_parties = np.loadtxt(val_data_file, delimiter=',', max_rows=1, dtype=str)
-    exp_cov = np.loadtxt(val_data_file, delimiter=',', skiprows=1)
-    # Simulate elections
-    poll = from_csv('tests/pooled_sample.csv')
-    sim_results, sim_parties = sim_election(poll[0], 1_000_000, rounding_step=0.01)
-    # Reorder sim_results to match the order of exp_parties
-    idx_mapping = [sim_parties.index(party) for party in exp_parties]
-    reord_results = sim_results[:, idx_mapping]
-    # Covariance obtained from sim_results
-    act_cov = np.cov(reord_results.T)
-    
-    assert act_cov == pytest.approx(exp_cov, rel=1e-1)
-    # TODO add comparison of mean values
-    # TODO find names for csv data files
+def test_total_share_exceeds_one():
+    with pytest.raises(ValueError):
+        Poll('2025-05-15', 1000, {'a': 0.5000, 'b': 0.5001})
+
+def test_total_share_with_others_not_one():
+    with pytest.raises(ValueError):
+        Poll('2025-05-15', 1000, {'a': 0.4, 'b': 0.4, 'others': 0.1999})
