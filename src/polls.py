@@ -206,6 +206,7 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
         else:
             raise ValueError("invalid header in CSV file")
         lc_fnames: list[str] = [name.lower().strip() for name in fnames]
+        # Check if the CSV file contains all required fields
         for req in ('sample_date', 'sample_size'):
             if not req in lc_fnames:
                 raise ValueError(f"column '{req}' is missing in the CSV file")
@@ -215,12 +216,9 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
         fname_size: str = fnames[lc_fnames.index('sample_size')]
         fname_pollster: str | None = (fnames[lc_fnames.index('pollster')]
                                       if 'pollster' in lc_fnames else None)
-        # All remaining fields are interpreted as party names
+        # Interpret all remaining fields as party names
         parties: list[str] = [party for party in fnames
                               if party not in [fname_date, fname_size, fname_pollster]]
-        if not parties or (len(parties) == 1 and Poll.OTHERS_KEY.lower() in lc_fnames):
-            raise ValueError("CSV file must contain at least shares of one party "
-                             f"differing from '{Poll.OTHERS_KEY}'")
 
         # Check for duplicates
         if len(parties) != len(set(name.strip() for name in parties)):
@@ -229,6 +227,8 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
         # Read each line, try to convert values and create a Poll
         for line_no, row in enumerate(reader, 2):
             try:
+                if not any(val.strip() for val in row.values()):
+                    continue # skip empty row
                 # Metadata
                 sample_date: date = date.fromisoformat(row[fname_date].strip())
                 sample_size: float = float(row[fname_size])
