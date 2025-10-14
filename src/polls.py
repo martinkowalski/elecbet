@@ -30,7 +30,7 @@ Example:
 
 from collections.abc import Sequence
 from csv import DictReader
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import ClassVar
 import numpy as np
@@ -38,7 +38,6 @@ from numpy.typing import NDArray
 
 FloatArray = NDArray[np.float64]
 
-@dataclass
 class Poll:
     """Metadata and results of an election poll in a multi-party system.
     
@@ -76,73 +75,112 @@ class Poll:
         [0.5, 0.4, 0.1]
     """
     OTHERS_KEY: ClassVar[str] = 'others'
+    _TOL: ClassVar[float] = 1e-6
 
-    sample_date: date
-    sample_size: float
-    results: dict[str, float] = field(init=False)
-    pollster: str = 'unspecified'
+    @staticmethod
+    def _convert(sample_date: str | date | datetime) -> date:
+        """Convert sample_date if not passed as datetime.date."""
+
+        if isinstance(sample_date, datetime):
+            sample_date = sample_date.date()
+        elif not isinstance(sample_date, date): # -> sample_date should be a str
+            sample_date = date.fromisoformat(sample_date)
+
+        return sample_date
+    
+    @staticmethod
+    def _validate(results: dict[str, float]) -> None:
+        """_summary_
+
+        Args:
+            results (dict[str, float]): _description_
+
+        Raises:
+            ValueError: _description_
+            ValueError: _description_
+            ValueError: _description_
+            ValueError: _description_
+
+        Returns:
+            list[float], str: _description_
+        """
+        share_ratios: list[float] = list(results.values())
+        shares_as_pct: bool = any(share > 1.0 for share in share_ratios)
+        if shares_as_pct:
+            share_ratios = [share / 100.0 for share in share_ratios]
+        # Validate individual share ratios
+        for party, share in zip(results, share_ratios):
+            if not 0.0 <= share <= 1.0:
+                raise ValueError(f"share ratios must be in the range [0.0, 1.0], "
+                                 f"received '{party}': {share}")
+        # Check for multiple definitions of OTHERS_KEY
+        given_others_key = ''
+        for party in results:
+            if Poll.OTHERS_KEY.lower() == party.strip().lower():
+                if given_others_key:
+                    raise ValueError(f"Multiple '{Poll.OTHERS_KEY}' keys found (case "
+                                     f"insensitive): {given_others_key, party}")
+                given_others_key = party
+        # Validate total shares given presence/absence of OTHERS_KEY
+        sum_shares: float = sum(share_ratios)
+        if given_others_key:
+            if abs(1.0 - sum_shares) > Poll._TOL:
+                raise ValueError(f"If party '{given_others_key}' is included, share ratios from "
+                                 f"results must sum up to 1.0.\nReceived a total of {sum_shares}.")
+        else:
+            if sum_shares > 1.0 + Poll._TOL:
+                raise ValueError(f"Sum of share ratios must be <= 1.0, "
+                                 f"received a total of {sum_shares}.")
+
+    @staticmethod
+    def _normalize(results: dict[str, float]) -> dict[str, float]:
+        """_summary_
+
+        Args:
+            results (dict[str, float]): _description_
+
+        Returns:
+            dict[str, float]: _description_
+        """
+        # Normalize party names
+        norm_parties: list[str] = []
+        others_included = False
+        for party in results:
+            party = party.strip()            
+            if Poll.OTHERS_KEY.lower() == party.lower():
+                party = Poll.OTHERS_KEY
+                others_included = True
+            norm_parties.append(party)
+        # Normalize shares
+        shares_as_pct: bool = any(share > 1.0 for share in results.values())
+        norm_shares: list[float] = [share / 100.0 if shares_as_pct else share
+                                    for share in results.values()]
+
+        sum_shares: float = sum(norm_shares)
+        if not others_included:
+            others_share = 1.0 - sum_shares
+            if others_share < Poll._TOL:
+                others_share = 0.0
+            norm_shares.append(others_share)
+            sum_shares += others_share
+            norm_parties.append(Poll.OTHERS_KEY)
+        # Rescale to a total of 1.0
+        norm_shares = [share / sum_shares for share in norm_shares]
+
+        return dict(zip(norm_parties, norm_shares))
 
     def __init__(self,
-                 sample_date: str | date | datetime,
+                 reference_date: str | date | datetime,
                  sample_size: float,
                  results: dict[str, float],
                  pollster: str = 'unspecified') -> None:
 
-        # Handle sample_date
-        if isinstance(sample_date, datetime):
-            sample_date = sample_date.date()
-        elif not isinstance(sample_date, date): # -> expected to be a str
-            sample_date = date.fromisoformat(sample_date)
-        self.sample_date = sample_date
-
-        # Validate sample_size
+        self.sample_date: date = self._convert(reference_date)
         if sample_size <= 0.0:
             raise ValueError("sample_size must be positive")
         self.sample_size = sample_size
-
-        # Handle results
-        res: dict[str, float] = results.copy()
-        # Validate party shares and identify OTHERS_KEY
-        sum_shares = 0.0
-        others_included = False
-        others_key = ''
-        for party, share in res.items():
-            # Validate each individual share
-            if not 0.0 <= share <= 1.0:
-                raise ValueError("Shares must be in the range [0.0, 1.0], "
-                                 f"received '{party}': {share}")
-            sum_shares += share
-            # Look for OTHERS_KEY (case-insensitive)
-            if party.lower() == Poll.OTHERS_KEY.lower():
-                if others_included:
-                    raise ValueError(f"Multiple '{Poll.OTHERS_KEY}' keys found (case "
-                                     f"insensitive): {others_key, party}")
-                others_included = True
-                others_key = party
-        # Validate total shares given presence/absence of OTHERS_KEY
-        tol = 1e-6 # tolerance of rounding errors
-        if others_included:
-            if abs(1.0 - sum_shares) > tol:
-                raise ValueError(
-                    f"If party '{others_key}' is included, shares in results must sum up\n"
-                    f"to 1.0 (±{tol}). Received a total of {sum_shares}."
-                )
-            others_share: float = res.pop(others_key) # included below again
-        else:
-            if sum_shares > 1.0 + tol:
-                raise ValueError(f"Sum of shares must be <= 1.0 (+{tol}), "
-                                 f"received a total of {sum_shares}.")
-            others_share = 1.0 - sum_shares
-            if others_share < tol:
-                others_share = 0.0
-            sum_shares += others_share
-        # Make sure others_share is included under OTHERS_KEY
-        res[Poll.OTHERS_KEY] = others_share
-        # Rescale to compensate rounding errors and enforce a sum of 1.0
-        if sum_shares != 1.0:
-            res = {party: share / sum_shares for party, share in res.items()}
-
-        self.results = res
+        self._validate(results)
+        self.results = self._normalize(results)
         self.pollster = pollster
 
     def __str__(self) -> str:
