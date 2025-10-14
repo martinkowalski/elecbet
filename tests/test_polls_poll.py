@@ -6,7 +6,7 @@ from src.polls import Poll
 
 # pylint: disable=missing-docstring
 
-def test_valid_poll_with_others():
+def test_poll_from_share_ratios_with_others():
     poll = Poll('2025-05-15', 0.5, {'Party A': 0.4, 'Party B': 0.5, 'OthErS': 0.1})
     assert poll.sample_date == dt.date(2025, 5, 15)
     assert poll.sample_size == 0.5
@@ -14,11 +14,15 @@ def test_valid_poll_with_others():
     assert poll.results['Party B'] == pytest.approx(0.5)
     assert poll.results[Poll.OTHERS_KEY] == pytest.approx(0.1)
 
-def test_valid_poll_without_others():
+def test_poll_from_share_ratios_without_others():
     poll = Poll('2025-05-15', 800, {'a': 0.5, 'b': 0.4999}, 'X')
     assert poll.pollster == 'X'
     assert poll.parties == ['a', 'b', Poll.OTHERS_KEY]
     assert poll.shares == pytest.approx([0.5000, 0.4999, 0.0001])
+
+def test_poll_from_share_percentages():
+    poll = Poll('2025-05-15', 800, {'a': 50.00, 'b': 49.99}, 'X')
+    assert poll.results == pytest.approx({'a': 0.5, 'b': 0.4999, 'others': 0.0001})
 
 def test_invalid_sample_size():
     with pytest.raises(ValueError):
