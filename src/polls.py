@@ -30,7 +30,6 @@ Example:
 
 from collections.abc import Sequence
 from csv import DictReader
-from dataclasses import dataclass
 from datetime import date, datetime
 from typing import ClassVar
 import numpy as np
@@ -87,7 +86,7 @@ class Poll:
             sample_date = date.fromisoformat(sample_date)
 
         return sample_date
-    
+
     @staticmethod
     def _validate(results: dict[str, float]) -> None:
         """_summary_
