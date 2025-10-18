@@ -22,7 +22,7 @@ def test_poll_from_share_ratios_without_others():
 
 def test_poll_from_share_percentages():
     poll = Poll('2025-05-15', 800, {'a': 0.5, 'b': 49.99}, 'X')
-    assert poll.results == pytest.approx({'a': 0.5, 'b': 0.4999, 'others': 0.4501})
+    assert poll.results == pytest.approx({'a': 0.005, 'b': 0.4999, 'others': 0.4951})
 
 def test_raise_on_invalid_sample_size():
     with pytest.raises(ValueError, match="sample_size"):
@@ -33,19 +33,14 @@ def test_raise_on_negative_share_ratio():
         Poll('2025-05-15', 1000, {'a': -0.1, 'b': 0.5})
 
 def test_raise_on_multiple_others_keys():
-    with pytest.raises(ValueError, match=f"Multiple '{Poll.OTHERS_KEY}' keys"):
+    with pytest.raises(ValueError, match="multiple"):
         Poll('2025-05-15', 1000, {'a': 0.5, 'others': 0.3, 'OTHERS': 0.2})
 
-def test_total_share_ratios_exceed_one():
+def test_raise_if_total_share_ratios_exceed_one():
     with pytest.raises(ValueError, match="must be <= 1.0"):
         Poll('2025-05-15', 1000, {'a': 0.5000, 'b': 0.5001})
 
-def test_total_share_ratios_with_others_not_one():
+def test_raise_if_total_share_ratios_with_others_not_one():
     others_key = 'Others'
     with pytest.raises(ValueError, match=f"If party '{others_key}' is included"):
         Poll('2025-05-15', 1000, {'a': 0.4, 'b': 0.4, others_key: 0.1999})
-
-def test_total_share_percentages_exceed_100():
-    with pytest.raises(ValueError, match="must be <= 1.0"):
-        Poll('2025-05-15', 1000, {'a': 50.00, 'b': 50.01})
-

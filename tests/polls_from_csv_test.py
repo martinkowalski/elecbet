@@ -1,7 +1,7 @@
-"""Test Poll functionality of from_csv.
+"""Test functionality of polls.from_csv.
 
-Only special cases and error catching are tested here. Regular cases are covered by
-end-to-end tests.
+Only special cases and error catching are tested here.
+Regular cases are covered by end-to-end tests.
 """
 
 import datetime as dt
@@ -50,6 +50,11 @@ def test_no_pollster(make_tmp_csv):
     polls = from_csv(make_tmp_csv(content))
     assert polls[0].pollster == polls[1].pollster == 'unspecified'
 
+def test_no_party_without_name(make_tmp_csv):
+    content = "sample_date,sample_size,a,,c\n2025-02-10,800,0.60,0.20,0.10"
+    polls = from_csv(make_tmp_csv(content))
+    assert polls[0].parties == ["a", "", "c", Poll.OTHERS_KEY]
+
 def test_no_parties(make_tmp_csv):
     content = "pollster,sample_date,sample_size\nX,2025-02-10,800\nY,2025-02-15,600"
     polls = from_csv(make_tmp_csv(content))
@@ -71,6 +76,11 @@ def test_raise_on_missing_column(make_tmp_csv, missg_col, content):
 
 def test_raise_on_missing_values(make_tmp_csv):
     content = "pollster,sample_date,sample_size,a,b\nX,2025-02-10,800,0.60"
+    with pytest.raises(ValueError, match="invalid data in line 2"):
+        from_csv(make_tmp_csv(content))
+
+def test_raise_on_invalid_values(make_tmp_csv):
+    content = "pollster,sample_date,sample_size,a,b\nX,2025-02-10,800,invalid share 0.20,0.60"
     with pytest.raises(ValueError, match="invalid data in line 2"):
         from_csv(make_tmp_csv(content))
 
