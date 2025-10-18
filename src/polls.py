@@ -31,7 +31,7 @@ Example:
 from collections.abc import Sequence
 from csv import DictReader
 from datetime import date, datetime
-from typing import ClassVar
+from typing import ClassVar, Any
 import numpy as np
 from numpy.typing import NDArray
 
@@ -52,7 +52,7 @@ class Poll:
     `sample_size` usually represents the number of respondents. It must be positive, but it can
     also be a representative non-integer value.
 
-    Additional class attributes:
+    Properties:
     - parties (list[str]): List of party names derived from poll `results`.
     - shares (list[float]): List of party shares derived from poll `results`.
 
@@ -76,118 +76,35 @@ class Poll:
     OTHERS_KEY: ClassVar[str] = 'others'
     _TOL: ClassVar[float] = 1e-6
 
-    @staticmethod
-    def _convert(sample_date: str | date | datetime) -> date:
-        """Convert sample_date if not passed as datetime.date."""
-
-        if isinstance(sample_date, datetime):
-            sample_date = sample_date.date()
-        elif not isinstance(sample_date, date): # -> sample_date should be a str
-            sample_date = date.fromisoformat(sample_date)
-
-        return sample_date
-
-    @staticmethod
-    def _validate(results: dict[str, float]) -> None:
-        """_summary_
-
-        Args:
-            results (dict[str, float]): _description_
-
-        Raises:
-            ValueError: _description_
-            ValueError: _description_
-            ValueError: _description_
-            ValueError: _description_
-
-        Returns:
-            list[float], str: _description_
-        """
-        share_ratios: list[float] = list(results.values())
-        shares_as_pct: bool = any(share > 1.0 for share in share_ratios)
-        if shares_as_pct:
-            share_ratios = [share / 100.0 for share in share_ratios]
-        # Validate individual share ratios
-        for party, share in zip(results, share_ratios):
-            if not 0.0 <= share <= 1.0:
-                raise ValueError(f"share ratios must be in the range [0.0, 1.0], "
-                                 f"received '{party}': {share}")
-        # Check for multiple definitions of OTHERS_KEY
-        given_others_key = ''
-        for party in results:
-            if Poll.OTHERS_KEY.lower() == party.strip().lower():
-                if given_others_key:
-                    raise ValueError(f"Multiple '{Poll.OTHERS_KEY}' keys found (case "
-                                     f"insensitive): {given_others_key, party}")
-                given_others_key = party
-        # Validate total shares given presence/absence of OTHERS_KEY
-        sum_shares: float = sum(share_ratios)
-        if given_others_key:
-            if abs(1.0 - sum_shares) > Poll._TOL:
-                raise ValueError(f"If party '{given_others_key}' is included, share ratios from "
-                                 f"results must sum up to 1.0.\nReceived a total of {sum_shares}.")
-        else:
-            if sum_shares > 1.0 + Poll._TOL:
-                raise ValueError(f"Sum of share ratios must be <= 1.0, "
-                                 f"received a total of {sum_shares}.")
-
-    @staticmethod
-    def _normalize(results: dict[str, float]) -> dict[str, float]:
-        """_summary_
-
-        Args:
-            results (dict[str, float]): _description_
-
-        Returns:
-            dict[str, float]: _description_
-        """
-        # Normalize party names
-        norm_parties: list[str] = []
-        others_included = False
-        for party in results:
-            party = party.strip()            
-            if Poll.OTHERS_KEY.lower() == party.lower():
-                party = Poll.OTHERS_KEY
-                others_included = True
-            norm_parties.append(party)
-        # Normalize shares
-        shares_as_pct: bool = any(share > 1.0 for share in results.values())
-        norm_shares: list[float] = [share / 100.0 if shares_as_pct else share
-                                    for share in results.values()]
-
-        sum_shares: float = sum(norm_shares)
-        if not others_included:
-            others_share = 1.0 - sum_shares
-            if others_share < Poll._TOL:
-                others_share = 0.0
-            norm_shares.append(others_share)
-            sum_shares += others_share
-            norm_parties.append(Poll.OTHERS_KEY)
-        # Rescale to a total of 1.0
-        norm_shares = [share / sum_shares for share in norm_shares]
-
-        return dict(zip(norm_parties, norm_shares))
-
     def __init__(self,
-                 reference_date: str | date | datetime,
+                 sample_date: str | date | datetime,
                  sample_size: float,
                  results: dict[str, float],
                  pollster: str = 'unspecified') -> None:
 
-        self.sample_date: date = self._convert(reference_date)
+        self.sample_date: date = self._coerce_to_date(sample_date)
         if sample_size <= 0.0:
             raise ValueError("sample_size must be positive")
         self.sample_size = sample_size
-        self._validate(results)
-        self.results = self._normalize(results)
+        # Convert shares to ratios if given as percentages
+        if any(share > 1.0 for share in results.values()):
+            results = {party: share / 100.0 for party, share in results.items()}
+        self._validate_results(results)
+        self.results = self._normalize_results(results)
         self.pollster = pollster
+
+    def __repr__(self) -> str:
+        return (f"{self.__class__.__name__}("
+                f"sample_date={self.sample_date!r}, "
+                f"sample_size={self.sample_size!r}, "
+                f"results={self.results!r}, "
+                f"pollster={self.pollster!r})")
 
     def __str__(self) -> str:
         width: int = max(len(name) for name in self.results.keys()) + 2
         desc: str = f"{self.pollster}, {self.sample_date}, size = {self.sample_size:.2f}"
         for party, share in self.results.items():
             desc += f"\n{party:>{width}}: {share:.2%}"
-
         return desc
 
     @property
@@ -197,22 +114,105 @@ class Poll:
 
     @property
     def shares(self) -> list[float]:
-        """Party shares"""
+        """Party share ratios"""
         return list(self.results.values())
+
+    @staticmethod
+    def _coerce_to_date(sample_date: str | date | datetime) -> date:
+        """Return given sample_date as datetime.date."""
+        if isinstance(sample_date, datetime):
+            sample_date = sample_date.date()
+        elif not isinstance(sample_date, date): # -> sample_date should be a str
+            sample_date = date.fromisoformat(sample_date)
+        return sample_date
+
+    @classmethod
+    def _validate_results(cls, results: dict[str, float]) -> None:
+        """Validate party names and shares in given results.
+        The passed results must contain shares as ratios.
+        
+        Check:
+        - At most one Poll.OTHERS_KEY in parties (case-insensitive)
+        - 0 <= share <= 1
+        - sum(shares) == 1 if OTHERS_KEY in parties
+        - sum(shares) <= 1 if OTHERS_KEY not in parties
+
+        Raise ValueError if a condition is not met.
+        """
+        # Validate individual share ratios
+        for party, share in results.items():
+            if not 0.0 <= share <= 1.0:
+                raise ValueError(f"share ratios must be in the range [0.0, 1.0], "
+                                 f"received '{party}': {share}")
+        # Ensure parties in results are strings and check for multiple definitions of OTHERS_KEY
+        given_others_key = ''
+        for party in results:
+            if not isinstance(party, str):
+                raise ValueError(f"party names in results must be strings, received {party}")
+            if cls.OTHERS_KEY.lower() == party.strip().lower():
+                if given_others_key:
+                    raise ValueError(f"multiple '{cls.OTHERS_KEY}' keys found (case "
+                                     f"insensitive): {given_others_key}, {party}")
+                given_others_key = party
+        # Validate total shares given presence/absence of OTHERS_KEY
+        sum_shares: float = sum(results.values())
+        if given_others_key:
+            if abs(1.0 - sum_shares) > cls._TOL:
+                raise ValueError(f"If party '{given_others_key}' is included, share ratios from "
+                                 f"results must sum up to 1.0.\nReceived a total of {sum_shares}.")
+        else:
+            if sum_shares > 1.0 + cls._TOL:
+                raise ValueError("sum of share ratios must be <= 1.0, "
+                                 f"received a total of {sum_shares}")
+
+    @classmethod
+    def _normalize_results(cls, results: dict[str, float]) -> dict[str, float]:
+        """Normalize party names and shares in results and return as new dict.
+        The passed results must contain shares as ratios.
+
+        - Party names: Make sure Poll.OTHERS_KEY is included
+        - Shares:
+            1. Normalize shares to [0.0, 1.0] if given as percentages
+            2. Make sure party Poll.OTHERS_KEY and its share ratio are included
+            3. Rescale share ratios to a total of 1.0
+        """
+        # Detect if others_key is included (case-insensitive) in parties
+        norm_parties: list[str] = []
+        others_included = False
+        for party in results:
+            if cls.OTHERS_KEY.lower() == party.strip().lower():
+                # Make sure others_key is included as Poll.OTHERS_KEY
+                party = cls.OTHERS_KEY
+                others_included = True
+            norm_parties.append(party)
+
+        norm_shares: list[float] = list(results.values())
+        sum_shares: float = sum(norm_shares)
+        if not others_included:
+            # Compute share ratio of party Poll.OTHERS_KEY and append party and share
+            others_share = 1.0 - sum_shares
+            if others_share < cls._TOL:
+                others_share = 0.0
+            norm_shares.append(others_share)
+            norm_parties.append(cls.OTHERS_KEY)
+            sum_shares += others_share
+        # Rescale share ratios to a total of 1.0
+        norm_shares = [share / sum_shares for share in norm_shares]
+
+        return dict(zip(norm_parties, norm_shares))
 
 
 def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
     """Create polls from a CSV file.
     
-    Each line in the CSV file contains data of a single poll. Empty lines are not allowed. The
-    header must specify the following metadata:
+    Each line in the CSV file contains data of a single poll. The header must specify the
+    following metadata:
     - sample_date (required)
     - sample_size (required)
     - pollster (optional)
-    
-    All other columns are interpreted as party names and their corresponding vote shares. At least
-    one party with a name different from `Poll.OTHERS_KEY` must be present.
-    
+
+    All other columns are interpreted as party names and their corresponding vote shares.
+
     Example CSV file:
     ```
     pollster,sample_date,sample_size,party_a,party_b,others
@@ -233,50 +233,67 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
         list[Poll]: List of created `Poll` objects.
     """
     polls: list[Poll] = []
-
     with open(filepath, encoding=encoding, newline='') as csvfile:
         reader = DictReader(csvfile, restval='', **kwargs)
-
-        # Check (case insensitive) if the CSV file contains all required fields
-        if reader.fieldnames:
-            fnames: list[str] = list(reader.fieldnames)
-        else:
-            raise ValueError("invalid header in CSV file")
-        lc_fnames: list[str] = [name.lower().strip() for name in fnames]
-        # Check if the CSV file contains all required fields
-        for req in ('sample_date', 'sample_size'):
-            if not req in lc_fnames:
-                raise ValueError(f"column '{req}' is missing in the CSV file")
-
-        # Extract case sensitive metadata fieldnames
-        fname_date: str = fnames[lc_fnames.index('sample_date')]
-        fname_size: str = fnames[lc_fnames.index('sample_size')]
-        fname_pollster: str | None = (fnames[lc_fnames.index('pollster')]
-                                      if 'pollster' in lc_fnames else None)
-        # Interpret all remaining fields as party names
-        parties: list[str] = [party for party in fnames
-                              if party not in [fname_date, fname_size, fname_pollster]]
-
-        # Check for duplicates
-        if len(parties) != len(set(name.strip() for name in parties)):
-            raise ValueError("duplicate party names in the header")
-
+        column_map = _parse_csv_header(reader.fieldnames) # canonical -> actual names
         # Read each line, try to convert values and create a Poll
         for line_no, row in enumerate(reader, 2):
             try:
-                if not any(val.strip() for val in row.values()):
-                    continue # skip empty row
-                # Metadata
-                sample_date: date = date.fromisoformat(row[fname_date].strip())
-                sample_size: float = float(row[fname_size])
-                pollster: str = row.get(fname_pollster, '').strip()
-                # Party shares
-                results = {party.strip(): float(row[party]) for party in parties}
-                polls.append(Poll(sample_date, sample_size, results, pollster or 'unspecified'))
+                data: dict = _parse_csv_row(row, column_map)
+                if not data:
+                    continue
+                polls.append(Poll(**data))
             except ValueError as e:
-                raise ValueError(f"invalid data in line {line_no}") from e
+                raise ValueError(f"invalid data in line {line_no}: {e}") from e
 
     return polls
+
+def _parse_csv_header(fieldnames: Sequence[str] | None) -> dict[str, Any]:
+    """Validate CSV header and return a map of canonical keys to actual columns."""
+
+    if fieldnames is None:
+        raise ValueError('invalid header in CSV file')
+    fieldnames = list(fieldnames)
+    norm_names: list[str] = [name.lower().strip() for name in fieldnames]
+    # Required metadata columns
+    for key in ('sample_date', 'sample_size'):
+        if key not in norm_names:
+            raise ValueError(f"column '{key}' is missing in the CSV file")
+    sample_date: str = fieldnames[norm_names.index('sample_date')]
+    sample_size: str = fieldnames[norm_names.index('sample_size')]
+    pollster: str = (fieldnames[norm_names.index('pollster')]
+                     if 'pollster' in norm_names else '')
+    meta: list[str] = [sample_date, sample_size]
+    if pollster:
+        meta.append(pollster)
+    # All remaining fields must be names of parties
+    parties: list[str] = [name for name in fieldnames if name not in meta]
+    if len(parties) != len(set(name.strip() for name in parties)):
+        raise ValueError("duplicate party names in the header of the CSV file")
+
+    return {'sample_date': sample_date,
+            'sample_size': sample_size,
+            'pollster': pollster,
+            'parties': parties}
+
+def _parse_csv_row(row: dict[str, str], column_map: dict[str, Any]) -> dict[str, Any]:
+    """Parse a CSV row into Poll kwargs."""
+
+    if not any(val.strip() for val in row.values()):
+        return {}
+    # Metadata
+    data: dict[str, Any] = {
+        'sample_date': date.fromisoformat(row[column_map['sample_date']].strip()),
+        'sample_size': float(row[column_map['sample_size']].strip())
+    }
+    if column_map['pollster']:
+        pollster: str = row.get(column_map['pollster'], '').strip()
+        if pollster:
+            data['pollster'] = pollster
+    # Party shares
+    data['results'] = {party.strip(): float(row[party].strip()) for party in column_map['parties']}
+
+    return data
 
 
 def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
@@ -354,7 +371,6 @@ def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
     pooled_date: date = date.fromordinal(mean_ordinal)
 
     return Poll(pooled_date, pooled_size, pooled_shares, 'pooled')
-
 
 def _effective_samplesize(one_party_sizes: list[float],
                           one_party_shares: list[float],
