@@ -2,7 +2,7 @@
 
 import datetime as dt
 import pytest
-from src.polls import Poll
+from elecbet.polls import Poll
 
 # pylint: disable=missing-docstring
 

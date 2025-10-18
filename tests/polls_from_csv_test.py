@@ -6,7 +6,7 @@ Regular cases are covered by end-to-end tests.
 
 import datetime as dt
 import pytest
-from src.polls import from_csv, Poll
+from elecbet.polls import from_csv, Poll
 
 FILENAME = 'testdata.csv'
 

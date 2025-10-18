@@ -7,7 +7,7 @@ Validate:
 """
 import numpy as np
 import pytest
-from src.polls import from_csv, pool, sim_election
+from elecbet.polls import from_csv, pool, sim_election
 
 def test_from_csv_and_pool():
     """Verify that polls are created correctly from CSV files and pooled as expected.
