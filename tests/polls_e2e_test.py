@@ -26,25 +26,40 @@ def test_from_csv_and_pool():
     assert act.sample_date == exp.sample_date
 
 def test_sim_election():
-    """Test simulation of elections based on pooled_sample.csv pooling results.
+    """Test simulation of elections by comparison with reference results.
     
-    The correctness of the simulation is determined by comparing the covariance matrix resulting
-    from the simulation result with precomputed values stored in `pooled_sample_sim_elect_cov.csv`.
+    The credibility of sim_election is determined by comparing party share means and covariance
+    with reference values. These were obtained from the MATLAB version of elecbet. Both simulations
+    are based on `pooled_sample.csv` pooling results and carried out with the following parameters:
+    `nsim = 1_000_000`, `rounding_step = 0.01`.
+
+    Note:
+    This is not a full proof of correctness as the reference values are not independently verfied.
+    The test only ensures sim_election runs without syntax or major calculation errors.
     """
-    # Load validation data
-    val_data_file = 'tests/testdata/pooled_sample_sim_elect_cov.csv'
-    exp_parties = np.loadtxt(val_data_file, delimiter=',', max_rows=1, dtype=str)
-    exp_cov = np.loadtxt(val_data_file, delimiter=',', skiprows=1)
+    # Load reference data
+    # Mean values
+    ref_file = 'tests/testdata/pooled_sample_sim_elect_mean.csv'
+    exp_parties_mean = np.loadtxt(ref_file, delimiter=',', max_rows=1, dtype=str)
+    exp_mean = np.loadtxt(ref_file, delimiter=',', skiprows=1)
+    # Covariance matrix
+    ref_file = 'tests/testdata/pooled_sample_sim_elect_cov.csv'
+    exp_parties_cov = np.loadtxt(ref_file, delimiter=',', max_rows=1, dtype=str)
+    exp_cov = np.loadtxt(ref_file, delimiter=',', skiprows=1)
+
     # Simulate elections
     poll = from_csv('tests/testdata/pooled_sample.csv')
     sim_results, sim_parties = sim_election(poll[0], 1_000_000, rounding_step=0.01)
-    # Reorder sim_results to match the order of exp_parties
-    idx_mapping = [sim_parties.index(party) for party in exp_parties]
+
+    # Compare with reference values
+    # Mean values
+    idx_mapping = [sim_parties.index(party) for party in exp_parties_mean]
+    reord_results = sim_results[:, idx_mapping]
+    act_mean = np.mean(sim_results, axis=0)
+    assert act_mean == pytest.approx(exp_mean, rel=1e-2)
+    # Covariance matrix
+    idx_mapping = [sim_parties.index(party) for party in exp_parties_cov]
     reord_results = sim_results[:, idx_mapping]
     # Covariance obtained from sim_results
     act_cov = np.cov(reord_results.T)
-
-    
     assert act_cov == pytest.approx(exp_cov, rel=1e-1)
-    # TODO add comparison of mean values
-    
