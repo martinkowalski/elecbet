@@ -49,17 +49,18 @@ def test_sim_election():
 
     # Simulate elections
     poll = from_csv('tests/testdata/pooled_sample.csv')
-    sim_results, sim_parties = sim_election(poll[0], 1_000_000, rounding_step=0.01)
+    sim_results = sim_election(poll[0], 1_000_000, rounding_step=0.01)
 
     # Compare with reference values
     # Mean values
+    sim_parties = sim_results.parties
     idx_mapping = [sim_parties.index(party) for party in exp_parties_mean]
-    reord_results = sim_results[:, idx_mapping]
-    act_mean = np.mean(sim_results, axis=0)
+    reord_shares = sim_results.shares[:, idx_mapping]
+    act_mean = np.mean(reord_shares, axis=0)
     assert act_mean == pytest.approx(exp_mean, rel=1e-2)
     # Covariance matrix
     idx_mapping = [sim_parties.index(party) for party in exp_parties_cov]
-    reord_results = sim_results[:, idx_mapping]
+    reord_shares = sim_results.shares[:, idx_mapping]
     # Covariance obtained from sim_results
-    act_cov = np.cov(reord_results.T)
+    act_cov = np.cov(reord_shares.T)
     assert act_cov == pytest.approx(exp_cov, rel=1e-1)

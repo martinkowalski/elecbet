@@ -30,6 +30,7 @@ Example:
 
 from collections.abc import Sequence
 from csv import DictReader
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import ClassVar, Any
 import numpy as np
@@ -53,15 +54,15 @@ class Poll:
     also be a representative non-integer value.
 
     Properties:
-    - parties (list[str]): List of party names derived from poll `results`.
-    - shares (list[float]): List of party shares derived from poll `results`.
+    - parties: List of party names derived from poll `results`.
+    - shares: List of party shares derived from poll `results`.
 
     Args:
-        sample_date (str | datetime.date | datetime.datetime): Date or ISO string 'YYYY-MM-DD'.
-        sample_size (float): A positive sample size.
-        results (dict[str, float]): Poll results given as party: share pairs. Key matching 'others'
-            (case-insensitive) represents the aggregate share of all other parties.
-        pollster (str, optional): Name of the polling agency. Defaults to 'unspecified'.
+        sample_date: Date or ISO string 'YYYY-MM-DD'.
+        sample_size: A positive sample size.
+        results: Poll results given as party: share pairs. Key matching 'others' (case-insensitive)
+            represents the aggregate share of all other parties.
+        pollster: Name of the polling agency. Defaults to 'unspecified'.
     
     Raises:
         ValueError: If `sample_size` is non-positive, vote shares are invalid, total shares are out
@@ -221,8 +222,8 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
     ```
 
     Args:
-        filepath (str): Path to the CSV file.
-        encoding (str, optional): Encoding of the CSV file. Defaults to 'utf-8'.
+        filepath: Path to the CSV file.
+        encoding (optional): Encoding of the CSV file. Defaults to 'utf-8'.
         **kwargs: Additional keyword arguments to pass to `csv.DictReader()`.
 
     Raises:
@@ -230,7 +231,7 @@ def from_csv(filepath: str, encoding='utf-8', **kwargs) -> list[Poll]:
             share values are invalid.
 
     Returns:
-        list[Poll]: List of created `Poll` objects.
+        A list of created `Poll` objects.
     """
     polls: list[Poll] = []
     with open(filepath, encoding=encoding, newline='') as csvfile:
@@ -324,12 +325,12 @@ def pool(polls: Sequence[Poll], pollster_corr: float = 0.5) -> Poll:
          pollster = 'pooled')`
 
     Args:
-        polls (Sequence[Poll]): A list of polls, each containing the same parties.
-        pollster_corr (float, optional): Assumed correlation between polls from different
-            pollsters, passed to _effective_samplesize. Defaults to 0.5.
+        polls: A sequence of polls, each containing the same parties.
+        pollster_corr (optional): Assumed correlation between polls from different pollsters,
+            passed to _effective_samplesize. Defaults to 0.5.
 
     Returns:
-        Poll: The aggregated poll.
+        The aggregated poll.
     """
     # Check polls
     if not polls:
@@ -386,17 +387,17 @@ def _effective_samplesize(one_party_sizes: list[float],
     module-level reference.
 
     Args:
-        one_party_sizes (list[float]): A vector of sample sizes (number of votes) from different
-            surveys (from different pollsters) for one single party.
-        one_party_shares (list[float]): The relative shares of votes for the party of interest
-            (each value in the range [0, 1]).
-        corr (float, optional): Assumed correlation between surveys from different pollsters.
-            Defaults to 0.5.
-        survey_weights (list[float], optional): Additional weights for individual surveys.
-            Defaults to None, in this case `survey_weights = one_party_sizes` will be assigned.
+        one_party_sizes: A vector of sample sizes (number of votes) from different surveys (from
+            different pollsters) for one single party.
+        one_party_shares: The relative shares of votes for the party of interest (each value in the
+            range [0, 1]).
+        corr (optional): Assumed correlation between surveys from different pollsters. Defaults
+            to 0.5.
+        survey_weights (optional): Additional weights for individual surveys. Defaults to None, in
+            this case `survey_weights = one_party_sizes` will be assigned.
 
     Returns:
-        float: The effective sample size.
+        The effective sample size.
     """
     # Convert to np.ndarrays for calculations
     # Variable names as used in the original function pooling.R
@@ -451,38 +452,43 @@ def _effective_samplesize(one_party_sizes: list[float],
     return float(n_eff)
 
 
-def sim_election(poll: Poll, nsim: int,
-                 rounding_step: float = 0.0) -> tuple[FloatArray, list[str]]:
+@dataclass
+class SimulationResults:
+    """Simulated election outcomes from `nsim` runs.
+
+    Attributes:
+        parties: `np` party names
+        shares: Simulated vote shares of shape `(nsim, np)`. `shares[i, j]` is the share of
+            `parties[j]` in simulation `i`.
+    """
+    parties: list[str]
+    shares: FloatArray
+
+def sim_election(poll: Poll, nsim: int, rounding_step: float = 0.0) -> SimulationResults:
     """Run a Monte Carlo simulation of election outcomes.
 
     Draw `nsim` samples of party vote shares for the `np` parties in `poll` using a Dirichlet
-    distribution according to the KOALA model (see the module-level reference). Return simulation
-    results as tuple `(results, parties)`. `results` is an np.ndarray of shape `(nsim, np)`,
-    `parties` is a list of `np` party names. Thus, `results[i, j]` is the share of `parties[j]` in
-    simulation `i`.
+    distribution according to the KOALA model (see the module-level reference).
 
-    Poll results are often published as rounded values. To account for the loss of information, set
-    `rounding_step > 0.0`, indicating that `poll.shares` are based on values rounded to multiples
-    of `rounding_step` (for example, `rounding_step = 0.01` corresponds to rounding to whole
-    percentage points).
+    Rounding compensation:  
     - If `rounding_step > 0.0`, in every simulation i.i.d. uniform noise in the range
-      `[-rounding_step/2, +rounding_step/2]` is added to `poll.shares`. The perturbed shares are
-      then clipped to the range [0, 1] and renormalized to sum to 1.0.
-    - If `rounding_step <= 0`, no perturbation is applied and all results are drawn based on the
-      same base shares (`poll.shares`).
+      `[-rounding_step/2, +rounding_step/2]` is added to `poll.shares` (for example,
+      `rounding_step = 0.01` corresponds to rounding to whole percentage points). The perturbed
+      shares are then clipped to the range [0, 1] and renormalized to sum to 1.0.
+    - If `rounding_step <= 0.0`, no perturbation is applied; all simulations use the same base
+      shares (`poll.shares`).
 
     Args:
-        poll (Poll): The poll providing the input data for the simulation. Typically created by
+        poll: The poll providing the input data for the simulation. Typically created by
             aggregating multiple polls using `pool(polls)`.
-        nsim (int): Number of independent election outcomes (party shares) to create.
-        rounding_step (float, optional): Increment to which the shares of the input `poll` (or
-            those of its underlying aggregated polls) have been rounded. A non-positive value
-            disables rounding compensation. Defaults to 0.0.
+        nsim: Number of independent election outcomes (party shares) to create.
+        rounding_step (optional): Increment to which the shares of the input `poll` (or those of
+            its underlying aggregated polls) have been rounded. A value <= 0.0 disables rounding
+            compensation. Defaults to 0.0.
 
     Returns:
-        tuple[FloatArray, list[str]]: Simulation `results` (shape `(nsim, np)`) and names of
-            `parties` (length `np`). `results[i, j]` is the share of `parties[j]` in
-            simulation `i`.
+        Simulation results consisting of `np` party names (`parties`, equal to `poll.parties`) and
+            simulated vote shares `shares` of shape `(nsim, np)`.
     """
     base_shares: FloatArray = np.array(poll.shares)
     alpha: FloatArray
@@ -490,7 +496,7 @@ def sim_election(poll: Poll, nsim: int,
 
     if rounding_step <= 0.0: # no rounding compensation
         alpha = base_shares * poll.sample_size + 0.5
-        return rng.dirichlet(alpha, size=nsim), poll.parties
+        return SimulationResults(poll.parties, rng.dirichlet(alpha, size=nsim))
 
     # rounding_step > 0.0 => apply rounding compensation
     # Ensure that below not all noisy_shares can become 0.0 after clipping
@@ -508,4 +514,4 @@ def sim_election(poll: Poll, nsim: int,
     # (see https://en.wikipedia.org/wiki/Dirichlet_distribution for details)
     gam_draws: FloatArray = rng.gamma(alpha)
 
-    return gam_draws / gam_draws.sum(axis=1, keepdims=True), poll.parties
+    return SimulationResults(poll.parties, gam_draws / gam_draws.sum(axis=1, keepdims=True))
