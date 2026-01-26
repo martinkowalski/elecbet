@@ -9,10 +9,9 @@ Examples:
 
 """
 
-from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
-from polls import SimulationResults
+from elecbet.polls import SimulationResults
 
 
 class Bet:
@@ -73,7 +72,7 @@ class HighestShare(Bet):
         if self.party not in results.parties:
             raise ValueError(f"party '{self.party}' not in simulation results")
 
-        return results.shares.argmax(axis=0) == results.parties.index(self.party)
+        return results.shares.argmax(axis=1) == results.parties.index(self.party)
 
 
 class InRange(Bet):
