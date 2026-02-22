@@ -15,13 +15,14 @@ from elecbet.polls import SimulationResults
 
 
 class Bet:
-    """Base class defining the required functionality of concrete bets.
+    """Base class for all bet types.
     
-    All derived concrete bet classes must implement the following methods:
-    - is_won(self, result)
+    Concrete bet classes must implement `is_won(self, results)`, and should override
+    `__str__(self)` for meaningful output in a betting slip.
 
-    A derived concrete bet class should implement a _to_string method for a meaningful output in the
-    betting slip.
+    Attributes:
+        odds: Positive odds.
+        bookmaker: Name of the bookmaker.
     """
 
     def __init__(self, odds: float, bookmaker: str) -> None:
@@ -31,43 +32,46 @@ class Bet:
         self.bookmaker: str = bookmaker
 
     def __str__(self) -> str:
-        """Should be overwritten by derived classes."""
+        # Default string representation, override in derived classes
         return self.__class__.__name__
 
     def is_won(self, results: SimulationResults) -> NDArray[np.bool_]:
-        """_summary_
+        """Evaluate the bet against simulation results.
 
         Args:
-            results (SimulationResults): _description_
+            results: Simulation results to evaluate the bet against.
 
         Returns:
-            NDArray[np.bool]: _description_
+            Boolean array indicating whether the bet is won in each simulation.
         """
         raise NotImplementedError
 
 
 class HighestShare(Bet):
-    """_summary_
-
-    Args:
-        Bet (_type_): _description_
+    """Bet that a specific party achieves the highest vote share.
+    
+    Attributes:
+        party: Name of the party concerned.
     """
 
     def __init__(self, party: str, odds: float, bookmaker: str = '') -> None:
         Bet.__init__(self, odds, bookmaker)
         self.party: str = party
 
-    def _str__(self) -> str:
+    def __str__(self) -> str:
         return f"winner {self.party}"
 
     def is_won(self, results: SimulationResults) -> NDArray[np.bool_]:
-        """_summary_
+        """True for simulations where the party has the highest vote share.
+
+        The case of an exact tie in vote share between parties is considered practically irrelevant
+        and therefore no tie-breaking rule is applied.
 
         Args:
-            results (SimulationResults): _description_
+            results: Simulation results from `nsim` runs.
 
         Returns:
-            NDArray[np.bool_]: _description_
+            Boolean array of length `nsim`.
         """
         if self.party not in results.parties:
             raise ValueError(f"party '{self.party}' not in simulation results")
@@ -76,10 +80,12 @@ class HighestShare(Bet):
 
 
 class InRange(Bet):
-    """_summary_
+    """Bet that the total share of one or more parties lies within a specified range.
 
-    Args:
-        Bet (_type_): _description_
+    Attributes:
+        parties: List of party names whose shares are summed.
+        low: Lower bound of the range (exclusive).
+        high: Upper bound of the range (exclusive).
     """
 
     def __init__(self,
@@ -106,29 +112,33 @@ class InRange(Bet):
         return f"{parties_str} in range ({self.low:.2%}, {self.high:.2%})"
 
     def is_won(self, results: SimulationResults) -> NDArray[np.bool_]:
-        """_summary_
+        """Evaluate the bet against simulation results.
+        
+        True for simulations where the total share of the specified parties is strictly within the
+        given range.
 
         Args:
-            results (SimulationResults): _description_
+            results: Simulation results from `nsim` runs.
 
         Returns:
-            NDArray[np.bool_]: _description_
+            Boolean array of length `nsim`.
         """
         party_idx: list[int] = []
         for party in self.parties:
             if party not in results.parties:
                 raise ValueError(f"party '{party}' not in simulation results")
             party_idx.append(results.parties.index(party))
-        res_sums: NDArray = results.shares[:, party_idx].sum(axis=0)
+        res_sums: NDArray = results.shares[:, party_idx].sum(axis=1)
 
         return (self.low < res_sums) & (res_sums < self.high)
 
 
 class HeadToHead(Bet):
-    """_summary_
+    """Bet that one party or group of parties achieves a higher total share than another.
 
-    Args:
-        Bet (_type_): _description_
+    Attributes:
+        stronger: List of one or more party names in the 'stronger' group.
+        weaker: List of one or more party names in the 'weaker' group.
     """
 
     def __init__(self,
@@ -148,13 +158,16 @@ class HeadToHead(Bet):
         return f"{stronger_str} > {weaker_str}"
 
     def is_won(self, results: SimulationResults) -> NDArray[np.bool_]:
-        """_summary_
+        """Evaluate the bet against simulation results.
+        
+        True for simulations where the total share of the `stronger` group exceeds that of the
+        `weaker` group.
 
         Args:
-            results (SimulationResults): _description_
+            results: Simulation results from `nsim` runs.
 
         Returns:
-            NDArray[np.bool_]: _description_
+            Boolean array of length `nsim`.
         """
         stronger_idx: list[int] = []
         for party in self.stronger:
@@ -167,7 +180,7 @@ class HeadToHead(Bet):
                 raise ValueError(f"party '{party}' not in simulation results")
             weaker_idx.append(results.parties.index(party))
 
-        res_stronger: NDArray = results.shares[:, stronger_idx].sum(axis=0)
-        res_weaker: NDArray = results.shares[:, weaker_idx].sum(axis=0)
+        res_stronger: NDArray = results.shares[:, stronger_idx].sum(axis=1)
+        res_weaker: NDArray = results.shares[:, weaker_idx].sum(axis=1)
 
         return res_stronger > res_weaker
